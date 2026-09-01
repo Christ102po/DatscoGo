@@ -1,0 +1,44 @@
+# Project TODO
+
+- [x] Basic homepage layout & Siargao Leaflet map
+- [x] Modular directory structure and separated SVG icons
+- [x] Datsco Routes screen and unselected DATSCO tab on home
+- [x] Schedule screen with morning and afternoon slots
+- [x] Terminal screen with map preview cards
+- [x] Add interactive hover states and active press scale to bottom navigation
+- [x] Add loading spinner animations and active states to action buttons
+- [x] Remove showcase panels, folder structure view, and descriptive page chrome so only the DATSCO app design remains
+- [x] Make the app shell responsive for full-screen phone displays while retaining a device frame on larger screens
+- [x] Add a DATSCO launch splash screen with a smooth fade-out app-entry animation
+- [x] Create and use a dedicated DATSCO SVG monogram in the launch splash screen
+- [x] Remove the desktop mobile-device frame and present the DATSCO app as a full-screen responsive interface
+- [x] Rename all passenger-facing DATSCO branding to DatscoGo
+- [x] Simplify the sidebar to About Us, Contact Us, Help, and Login actions
+- [x] Add About Us, Contact Us, and FAQ help content panels
+- [x] Add role-based login with a changeable administrator credential and driver account access
+- [ ] Add database persistence and protected APIs for drivers, routes, fares, schedule entries, terminals, and active trips
+- [x] Create a driver dashboard for starting a departure, sharing live trip location, and recording arrival
+- [x] Create an admin dashboard to manage drivers, schedules, fares, availability, and terminal coordinates
+- [x] Show active DatscoGo trip status and vehicle location on the passenger map
+- [x] Replace remaining visible and accessibility-facing DATSCO branding with DatscoGo
+- [x] Add administrator-editable Facebook page, phone, and email details to the Contact Us panel
+- [x] Ensure the passenger dashboard reliably displays Siargao Island map tiles, terminal markers, and active-trip status
+- [x] Add persistent administrator controls to create, edit, and save DatscoGo routes
+- [x] Let administrators select and confirm terminal coordinates by clicking the Siargao map
+- [x] Add administrator controls to delete registered driver accounts
+- [x] Add administrator terminal deletion with a confirmation prompt
+- [x] Add interactive map-based terminal-to-terminal route selection and route-path editing
+- [x] Prevent deleting terminals that are used by saved routes and explain affected routes to administrators
+- [x] Store terminal IDs on routes so terminal dependency checks survive terminal name edits
+- [x] Cascade terminal display-name updates to linked route labels and test terminal dependency safeguards
+- [x] Make Terminal screen View map actions focus the passenger map and open selected terminal details
+- [x] Let administrators draw, review, and edit accurate terminal-to-terminal route paths on the Siargao map
+- [x] Show each saved custom route path to passengers when they select its DatscoGo route
+- [x] Hide saved custom route paths by default on the passenger map and remove numbered route markers
+- [x] Show an active custom route only after a passenger selects a departing driver marker
+- [x] Keep arrived driver location at its destination while removing its route path until the next departure
+- [x] Add administrator-configurable discounted fare amounts to each DatscoGo route
+- [x] Show regular and discounted fares clearly to passengers on route cards
+- [x] Support multiple independently active driver trips in the shared transit state
+- [x] Automatically refresh a departing driver's browser location while the driver dashboard remains active
+- [x] Show clear Live or Arrived badges with each passenger vehicle marker and reveal only its selected live route
