@@ -42,3 +42,17 @@
 - [x] Support multiple independently active driver trips in the shared transit state
 - [x] Automatically refresh a departing driver's browser location while the driver dashboard remains active
 - [x] Show clear Live or Arrived badges with each passenger vehicle marker and reveal only its selected live route
+- [x] Restore a responsive mobile-phone presentation for the DatscoGo app
+- [x] Add a passenger-map filter to show only Live vehicles
+- [x] Show the selected live driver's route destination in the map badge
+- [x] Warn passengers when a live driver's location update is stale
+- [x] Make the passenger shell responsive across phones, laptops, and large screens without forcing a phone frame
+- [x] Add a persistent blue floating map button above the footer on routes, schedule, and terminal screens
+- [x] Let administrators publish announcements that appear in the passenger notification panel
+- [x] Let administrators define barangays and named passing stops for each route
+- [x] Replace generic discounted fare with separate student and senior citizen fares
+- [x] Add stop-level passenger, student, and senior fare values for route stops
+- [x] Add passenger device location display and terminal guidance actions
+- [x] Use driver device GPS as the departure location and live trip position
+
+- [x] Add same-server synchronization for public transit configuration, announcements, and live vehicle GPS positions across devices

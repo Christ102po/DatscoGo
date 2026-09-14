@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 export type UserRole = 'passenger' | 'driver' | 'admin';
 export type TripStatus = 'idle' | 'departed' | 'arrived';
@@ -12,6 +12,18 @@ export interface Account {
   active: boolean;
 }
 
+export interface RouteWaypoint {
+  id: string;
+  latitude: number;
+  longitude: number;
+  /** Barangay, junction, landmark, or passenger-visible stop name. */
+  label: string;
+  /** Fare from the route origin to this stop. */
+  regularFare?: number | null;
+  studentFare?: number | null;
+  seniorCitizenFare?: number | null;
+}
+
 export interface TransitRoute {
   id: string;
   title: string;
@@ -20,20 +32,19 @@ export interface TransitRoute {
   originTerminalId: string;
   destinationTerminalId: string;
   type: 'bus' | 'ferry';
+  /** Full-route regular fare. */
   fare: number;
-  discountedFare: number | null;
+  /** Legacy field retained only so old saved data can be migrated. */
+  discountedFare?: number | null;
+  /** Full-route student fare. */
+  studentFare?: number | null;
+  /** Full-route senior citizen fare. */
+  seniorCitizenFare?: number | null;
   eta: string;
   duration: string;
   available: boolean;
   coordinates: [number, number][];
   waypoints?: RouteWaypoint[];
-}
-
-export interface RouteWaypoint {
-  id: string;
-  latitude: number;
-  longitude: number;
-  label: string;
 }
 
 export interface ScheduleEntry {
@@ -62,6 +73,14 @@ export interface ActiveTrip {
   lastUpdated: number;
 }
 
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  createdAt: number;
+  active: boolean;
+}
+
 export interface ContactDetails {
   facebook: string;
   phone: string;
@@ -74,13 +93,17 @@ interface TransitStore {
   schedules: ScheduleEntry[];
   terminals: Terminal[];
   activeTrips: ActiveTrip[];
+  announcements: Announcement[];
   contact: ContactDetails;
 }
 
-type StoredTransitStore = Omit<TransitStore, 'activeTrips'> & {
+type StoredTransitStore = Omit<TransitStore, 'activeTrips' | 'announcements'> & {
   activeTrips?: ActiveTrip[];
   activeTrip?: ActiveTrip | null;
+  announcements?: Announcement[];
 };
+
+type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'announcements' | 'contact'>;
 
 interface TransitContextValue extends TransitStore {
   currentUser: Omit<Account, 'passwordHash'> | null;
@@ -98,6 +121,9 @@ interface TransitContextValue extends TransitStore {
   updateTerminal: (terminalId: string, changes: Partial<Omit<Terminal, 'id'>>) => void;
   deleteTerminal: (terminalId: string) => { ok: boolean; affectedRoutes: string[] };
   updateContact: (changes: ContactDetails) => void;
+  addAnnouncement: (input: { title: string; message: string }) => void;
+  deleteAnnouncement: (announcementId: string) => void;
+  toggleAnnouncement: (announcementId: string) => void;
   startTrip: (driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => void;
   updateTripLocation: (driverId: string, location: { latitude: number; longitude: number }) => void;
   arriveTrip: (driverId: string) => void;
@@ -134,16 +160,17 @@ const initialStore: TransitStore = {
       destination: 'Dapa Terminal',
       originTerminalId: 'terminal-general-luna',
       destinationTerminalId: 'terminal-dapa',
-      type: 'ferry',
+      type: 'bus',
       fare: 30,
-      discountedFare: 24,
+      studentFare: 24,
+      seniorCitizenFare: 24,
       eta: '30 mins',
       duration: '30 min',
       available: true,
       coordinates: [[9.7895, 126.1554], [9.7865, 126.1305], [9.7702, 126.1002], [9.7578, 126.0689]],
       waypoints: [
-        { id: 'gl-dapa-1', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan junction' },
-        { id: 'gl-dapa-2', latitude: 9.7702, longitude: 126.1002, label: 'Dapa–General Luna road' },
+        { id: 'gl-dapa-1', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan', regularFare: 15, studentFare: 12, seniorCitizenFare: 12 },
+        { id: 'gl-dapa-2', latitude: 9.7702, longitude: 126.1002, label: 'Union / Dapa–General Luna Road', regularFare: 25, studentFare: 20, seniorCitizenFare: 20 },
       ],
     },
     {
@@ -155,14 +182,15 @@ const initialStore: TransitStore = {
       destinationTerminalId: 'terminal-general-luna',
       type: 'bus',
       fare: 30,
-      discountedFare: 24,
+      studentFare: 24,
+      seniorCitizenFare: 24,
       eta: '30 mins',
       duration: '30 min',
       available: true,
       coordinates: [[9.7578, 126.0689], [9.7702, 126.1002], [9.7865, 126.1305], [9.7895, 126.1554]],
       waypoints: [
-        { id: 'dapa-gl-1', latitude: 9.7702, longitude: 126.1002, label: 'Dapa–General Luna road' },
-        { id: 'dapa-gl-2', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan junction' },
+        { id: 'dapa-gl-1', latitude: 9.7702, longitude: 126.1002, label: 'Union / Dapa–General Luna Road', regularFare: 15, studentFare: 12, seniorCitizenFare: 12 },
+        { id: 'dapa-gl-2', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan', regularFare: 25, studentFare: 20, seniorCitizenFare: 20 },
       ],
     },
     {
@@ -174,14 +202,15 @@ const initialStore: TransitStore = {
       destinationTerminalId: 'terminal-del-carmen',
       type: 'bus',
       fare: 50,
-      discountedFare: 40,
+      studentFare: 40,
+      seniorCitizenFare: 40,
       eta: '1 hr',
       duration: '1 hr',
       available: true,
       coordinates: [[9.7578, 126.0689], [9.7912, 126.0366], [9.8354, 126.0048], [9.8789, 125.9750]],
       waypoints: [
-        { id: 'dapa-dc-1', latitude: 9.7912, longitude: 126.0366, label: 'San Isidro road' },
-        { id: 'dapa-dc-2', latitude: 9.8354, longitude: 126.0048, label: 'Del Carmen access road' },
+        { id: 'dapa-dc-1', latitude: 9.7912, longitude: 126.0366, label: 'San Miguel / Dapa Road', regularFare: 20, studentFare: 16, seniorCitizenFare: 16 },
+        { id: 'dapa-dc-2', latitude: 9.8354, longitude: 126.0048, label: 'Del Carmen Access Road', regularFare: 40, studentFare: 32, seniorCitizenFare: 32 },
       ],
     },
   ],
@@ -197,6 +226,7 @@ const initialStore: TransitStore = {
     { id: 'terminal-del-carmen', name: 'Del Carmen Terminal', details: 'Pier road · open 5:00am–5:00pm', latitude: 9.8789, longitude: 125.9750 },
   ],
   activeTrips: [],
+  announcements: [],
   contact: { facebook: '', phone: '', email: '' },
 };
 
@@ -221,21 +251,84 @@ function createId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-function normalizeStoredStore(store: StoredTransitStore): TransitStore {
-  const routes = store.routes.map((route) => ({
-    ...route,
-    originTerminalId: route.originTerminalId || store.terminals.find((terminal) => terminal.name === route.origin)?.id || '',
-    destinationTerminalId: route.destinationTerminalId || store.terminals.find((terminal) => terminal.name === route.destination)?.id || '',
-    discountedFare: typeof route.discountedFare === 'number' ? route.discountedFare : null,
-    waypoints: route.waypoints ?? route.coordinates.slice(1, -1).map(([latitude, longitude], index) => ({
-      id: `legacy-waypoint-${route.id}-${index}`,
-      latitude,
-      longitude,
-      label: `Passing point ${index + 1}`,
-    })),
+function normalizeWaypoint(routeId: string, point: RouteWaypoint, index: number): RouteWaypoint {
+  return {
+    id: point.id || `waypoint-${routeId}-${index}`,
+    latitude: Number(point.latitude),
+    longitude: Number(point.longitude),
+    label: point.label ?? `Passing point ${index + 1}`,
+    regularFare: typeof point.regularFare === 'number' ? point.regularFare : null,
+    studentFare: typeof point.studentFare === 'number' ? point.studentFare : null,
+    seniorCitizenFare: typeof point.seniorCitizenFare === 'number' ? point.seniorCitizenFare : null,
+  };
+}
+
+function normalizeRoute(route: TransitRoute, terminals: Terminal[]): TransitRoute {
+  const legacyDiscount = typeof route.discountedFare === 'number' ? route.discountedFare : null;
+  const points = route.waypoints ?? route.coordinates.slice(1, -1).map(([latitude, longitude], index) => ({
+    id: `legacy-waypoint-${route.id}-${index}`,
+    latitude,
+    longitude,
+    label: `Passing point ${index + 1}`,
   }));
+
+  return {
+    ...route,
+    originTerminalId: route.originTerminalId || terminals.find((terminal) => terminal.name === route.origin)?.id || '',
+    destinationTerminalId: route.destinationTerminalId || terminals.find((terminal) => terminal.name === route.destination)?.id || '',
+    studentFare: typeof route.studentFare === 'number' ? route.studentFare : legacyDiscount,
+    seniorCitizenFare: typeof route.seniorCitizenFare === 'number' ? route.seniorCitizenFare : legacyDiscount,
+    waypoints: points.map((point, index) => normalizeWaypoint(route.id, point, index)),
+  };
+}
+
+function normalizeStoredStore(store: StoredTransitStore): TransitStore {
+  const terminals = Array.isArray(store.terminals) ? store.terminals : initialStore.terminals;
+  const routes = (Array.isArray(store.routes) ? store.routes : initialStore.routes).map((route) => normalizeRoute(route, terminals));
   const activeTrips = Array.isArray(store.activeTrips) ? store.activeTrips : store.activeTrip ? [store.activeTrip] : [];
-  return { ...initialStore, ...store, routes, activeTrips, contact: store.contact ?? initialStore.contact };
+  return {
+    ...initialStore,
+    ...store,
+    terminals,
+    routes,
+    activeTrips,
+    announcements: Array.isArray(store.announcements) ? store.announcements : [],
+    contact: store.contact ?? initialStore.contact,
+  };
+}
+
+function publicStateFrom(store: TransitStore): PublicTransitState {
+  return {
+    routes: store.routes,
+    schedules: store.schedules,
+    terminals: store.terminals,
+    announcements: store.announcements,
+    contact: store.contact,
+  };
+}
+
+async function publishPublicState(store: TransitStore) {
+  try {
+    await fetch('/api/public-state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(publicStateFrom(store)),
+    });
+  } catch {
+    // Local development can run without the Express API; localStorage remains functional.
+  }
+}
+
+async function publishTrip(trip: ActiveTrip) {
+  try {
+    await fetch(`/api/trips/${encodeURIComponent(trip.driverId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(trip),
+    });
+  } catch {
+    // Keep the local trip functional if the shared API is unavailable.
+  }
 }
 
 export function getRoutesUsingTerminal(routes: TransitRoute[], terminalId: string) {
@@ -252,12 +345,19 @@ export function getArrivalLocation(activeTrip: ActiveTrip, routes: TransitRoute[
   return destination ? { latitude: destination.latitude, longitude: destination.longitude } : { latitude: activeTrip.latitude, longitude: activeTrip.longitude };
 }
 
+export const STALE_LOCATION_THRESHOLD_MS = 60_000;
+
+export function isTripLocationStale(activeTrip: ActiveTrip, now = Date.now(), threshold = STALE_LOCATION_THRESHOLD_MS) {
+  return activeTrip.status === 'departed' && now - activeTrip.lastUpdated > threshold;
+}
+
 export function replaceDriverActiveTrip(activeTrips: ActiveTrip[], nextTrip: ActiveTrip) {
   return [...activeTrips.filter((trip) => trip.driverId !== nextTrip.driverId), nextTrip];
 }
 
 export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [store, setStore] = useState<TransitStore>(initialStore);
+  const storeRef = useRef<TransitStore>(initialStore);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
 
@@ -270,6 +370,10 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     if (restoredSession?.userId) setCurrentUserId(restoredSession.userId);
     setIsReady(true);
   }, []);
+
+  useEffect(() => {
+    storeRef.current = store;
+  }, [store]);
 
   useEffect(() => {
     const syncStore = (event: StorageEvent) => {
@@ -287,10 +391,52 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     return () => window.removeEventListener('storage', syncStore);
   }, []);
 
-  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore) => {
+  // Poll the shared app server so passengers on another phone can receive admin
+  // announcements/config changes and live GPS positions from drivers.
+  useEffect(() => {
+    let cancelled = false;
+
+    const refresh = async () => {
+      try {
+        const [publicResponse, tripsResponse] = await Promise.all([
+          fetch('/api/public-state', { cache: 'no-store' }),
+          fetch('/api/trips', { cache: 'no-store' }),
+        ]);
+        const publicState = publicResponse.ok ? await publicResponse.json() as Partial<PublicTransitState> : null;
+        const remoteTrips = tripsResponse.ok ? await tripsResponse.json() as ActiveTrip[] : null;
+        if (cancelled) return;
+
+        setStore((current) => {
+          const next: TransitStore = {
+            ...current,
+            routes: Array.isArray(publicState?.routes) ? publicState!.routes.map((route) => normalizeRoute(route, Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals)) : current.routes,
+            schedules: Array.isArray(publicState?.schedules) ? publicState!.schedules : current.schedules,
+            terminals: Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals,
+            announcements: Array.isArray(publicState?.announcements) ? publicState!.announcements : current.announcements,
+            contact: publicState?.contact ?? current.contact,
+            activeTrips: Array.isArray(remoteTrips) ? remoteTrips : current.activeTrips,
+          };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          return next;
+        });
+      } catch {
+        // The frontend still works with localStorage when the shared API is not running.
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(refresh, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore, syncPublic = false) => {
     setStore((current) => {
       const next = updater(current);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      if (syncPublic) void publishPublicState(next);
       return next;
     });
   }, []);
@@ -330,15 +476,11 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   }, [replaceStore, store.accounts]);
 
   const deleteDriver = useCallback((driverId: string) => {
-    replaceStore((current) => {
-      const driver = current.accounts.find((account) => account.id === driverId && account.role === 'driver');
-      if (!driver) return current;
-      return {
-        ...current,
-        accounts: current.accounts.filter((account) => account.id !== driverId),
-        activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
-      };
-    });
+    replaceStore((current) => ({
+      ...current,
+      accounts: current.accounts.filter((account) => account.id !== driverId || account.role !== 'driver'),
+      activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
+    }));
   }, [replaceStore]);
 
   const setAdminPassword = useCallback(async (currentPassword: string, newPassword: string) => {
@@ -351,23 +493,23 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   }, [replaceStore, store.accounts]);
 
   const addRoute = useCallback((input: Omit<TransitRoute, 'id'>) => {
-    replaceStore((current) => ({ ...current, routes: [...current.routes, { ...input, id: createId('route') }] }));
+    replaceStore((current) => ({ ...current, routes: [...current.routes, { ...input, id: createId('route') }] }), true);
   }, [replaceStore]);
 
   const updateRoute = useCallback((routeId: string, changes: Partial<Omit<TransitRoute, 'id'>>) => {
-    replaceStore((current) => ({ ...current, routes: current.routes.map((route) => route.id === routeId ? { ...route, ...changes } : route) }));
+    replaceStore((current) => ({ ...current, routes: current.routes.map((route) => route.id === routeId ? { ...route, ...changes } : route) }), true);
   }, [replaceStore]);
 
   const addSchedule = useCallback((input: Omit<ScheduleEntry, 'id'>) => {
-    replaceStore((current) => ({ ...current, schedules: [...current.schedules, { ...input, id: createId('schedule') }] }));
+    replaceStore((current) => ({ ...current, schedules: [...current.schedules, { ...input, id: createId('schedule') }] }), true);
   }, [replaceStore]);
 
   const deleteSchedule = useCallback((scheduleId: string) => {
-    replaceStore((current) => ({ ...current, schedules: current.schedules.filter((schedule) => schedule.id !== scheduleId) }));
+    replaceStore((current) => ({ ...current, schedules: current.schedules.filter((schedule) => schedule.id !== scheduleId) }), true);
   }, [replaceStore]);
 
   const addTerminal = useCallback((input: Omit<Terminal, 'id'>) => {
-    replaceStore((current) => ({ ...current, terminals: [...current.terminals, { ...input, id: createId('terminal') }] }));
+    replaceStore((current) => ({ ...current, terminals: [...current.terminals, { ...input, id: createId('terminal') }] }), true);
   }, [replaceStore]);
 
   const updateTerminal = useCallback((terminalId: string, changes: Partial<Omit<Terminal, 'id'>>) => {
@@ -391,7 +533,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
           };
         }),
       };
-    });
+    }, true);
   }, [replaceStore]);
 
   const deleteTerminal = useCallback((terminalId: string) => {
@@ -399,40 +541,77 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     if (!terminal) return { ok: false, affectedRoutes: [] };
     const affectedRoutes = getRoutesUsingTerminal(store.routes, terminalId).map((route) => route.title);
     if (affectedRoutes.length > 0) return { ok: false, affectedRoutes };
-    replaceStore((current) => ({ ...current, terminals: current.terminals.filter((item) => item.id !== terminalId) }));
+    replaceStore((current) => ({ ...current, terminals: current.terminals.filter((item) => item.id !== terminalId) }), true);
     return { ok: true, affectedRoutes: [] };
   }, [replaceStore, store.routes, store.terminals]);
 
   const updateContact = useCallback((changes: ContactDetails) => {
-    replaceStore((current) => ({ ...current, contact: changes }));
+    replaceStore((current) => ({ ...current, contact: changes }), true);
+  }, [replaceStore]);
+
+  const addAnnouncement = useCallback(({ title, message }: { title: string; message: string }) => {
+    const announcement: Announcement = { id: createId('announcement'), title: title.trim(), message: message.trim(), createdAt: Date.now(), active: true };
+    replaceStore((current) => ({ ...current, announcements: [announcement, ...current.announcements] }), true);
+  }, [replaceStore]);
+
+  const deleteAnnouncement = useCallback((announcementId: string) => {
+    replaceStore((current) => ({ ...current, announcements: current.announcements.filter((announcement) => announcement.id !== announcementId) }), true);
+  }, [replaceStore]);
+
+  const toggleAnnouncement = useCallback((announcementId: string) => {
+    replaceStore((current) => ({ ...current, announcements: current.announcements.map((announcement) => announcement.id === announcementId ? { ...announcement, active: !announcement.active } : announcement) }), true);
   }, [replaceStore]);
 
   const startTrip = useCallback((driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => {
-    const route = store.routes.find((item) => item.id === routeId);
+    const route = storeRef.current.routes.find((item) => item.id === routeId);
     const [latitude, longitude] = location ? [location.latitude, location.longitude] : (route?.coordinates[0] ?? [9.7895, 126.1554]);
-    replaceStore((current) => ({ ...current, activeTrips: replaceDriverActiveTrip(current.activeTrips, { id: createId('trip'), driverId, routeId, status: 'departed', latitude, longitude, lastUpdated: Date.now() }) }));
-  }, [replaceStore, store.routes]);
+    const nextTrip: ActiveTrip = { id: createId('trip'), driverId, routeId, status: 'departed', latitude, longitude, lastUpdated: Date.now() };
+    replaceStore((current) => ({ ...current, activeTrips: replaceDriverActiveTrip(current.activeTrips, nextTrip) }));
+    void publishTrip(nextTrip);
+  }, [replaceStore]);
 
   const updateTripLocation = useCallback((driverId: string, location: { latitude: number; longitude: number }) => {
-    replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId && trip.status === 'departed' ? { ...trip, ...location, lastUpdated: Date.now() } : trip) }));
+    const existing = storeRef.current.activeTrips.find((trip) => trip.driverId === driverId && trip.status === 'departed');
+    if (!existing) return;
+    const nextTrip = { ...existing, ...location, lastUpdated: Date.now() };
+    replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId && trip.status === 'departed' ? nextTrip : trip) }));
+    void publishTrip(nextTrip);
   }, [replaceStore]);
 
   const arriveTrip = useCallback((driverId: string) => {
-    replaceStore((current) => {
-      return {
-        ...current,
-        activeTrips: current.activeTrips.map((trip) => {
-          if (trip.driverId !== driverId) return trip;
-          const arrivalLocation = getArrivalLocation(trip, current.routes, current.terminals);
-          return { ...trip, status: 'arrived', ...arrivalLocation, lastUpdated: Date.now() };
-        }),
-      };
-    });
+    const current = storeRef.current;
+    const existing = current.activeTrips.find((trip) => trip.driverId === driverId);
+    if (!existing) return;
+    const arrivalLocation = getArrivalLocation(existing, current.routes, current.terminals);
+    const nextTrip: ActiveTrip = { ...existing, status: 'arrived', ...arrivalLocation, lastUpdated: Date.now() };
+    replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId ? nextTrip : trip) }));
+    void publishTrip(nextTrip);
   }, [replaceStore]);
 
   const value = useMemo<TransitContextValue>(() => ({
-    ...store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, startTrip, updateTripLocation, arriveTrip,
-  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, startTrip, updateTripLocation, arriveTrip]);
+    ...store,
+    currentUser,
+    isReady,
+    login,
+    logout,
+    createDriver,
+    deleteDriver,
+    setAdminPassword,
+    addRoute,
+    updateRoute,
+    addSchedule,
+    deleteSchedule,
+    addTerminal,
+    updateTerminal,
+    deleteTerminal,
+    updateContact,
+    addAnnouncement,
+    deleteAnnouncement,
+    toggleAnnouncement,
+    startTrip,
+    updateTripLocation,
+    arriveTrip,
+  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, arriveTrip]);
 
   return <TransitContext.Provider value={value}>{children}</TransitContext.Provider>;
 };
