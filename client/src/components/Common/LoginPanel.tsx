@@ -62,7 +62,6 @@ export const LoginPanel: React.FC<LoginPanelProps> = ({ onClose, onLogin }) => {
           </button>
         </form>
 
-        <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Starter administrator credentials are <strong>admin123</strong> / <strong>admin123</strong>. Change this starter password from the administrator dashboard before production use.</p>
       </section>
     </div>
   );
