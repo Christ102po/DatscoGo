@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { MapContainer, Marker, Polyline, TileLayer, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { RouteWaypoint, Terminal } from '../../contexts/TransitContext';
+import { fetchRoadRoute } from '../../lib/routing';
 
 type RoutePoint = [number, number];
 type SelectionMode = 'origin' | 'destination' | 'waypoint';
@@ -31,13 +32,34 @@ const MapClicker: React.FC<{ mode: SelectionMode; onMapClick: (point: RoutePoint
 
 export const RouteMapPicker: React.FC<RouteMapPickerProps> = ({ terminals, originTerminalId, destinationTerminalId, points, onOriginChange, onDestinationChange, onPointsChange }) => {
   const [mode, setMode] = useState<SelectionMode>('origin');
+  const [roadLine, setRoadLine] = useState<RoutePoint[]>([]);
   const origin = terminals.find((terminal) => terminal.id === originTerminalId);
   const destination = terminals.find((terminal) => terminal.id === destinationTerminalId);
-  const routeLine = useMemo<RoutePoint[]>(() => [
+  const routingPoints = useMemo<RoutePoint[]>(() => [
     ...(origin ? [[origin.latitude, origin.longitude] as RoutePoint] : []),
     ...points.map((point) => [point.latitude, point.longitude] as RoutePoint),
     ...(destination ? [[destination.latitude, destination.longitude] as RoutePoint] : []),
-  ], [destination, origin, points]);
+  ], [destination?.id, destination?.latitude, destination?.longitude, origin?.id, origin?.latitude, origin?.longitude, points]);
+  const routingKey = routingPoints.map(([latitude, longitude]) => `${latitude.toFixed(6)},${longitude.toFixed(6)}`).join(';');
+
+  useEffect(() => {
+    if (routingPoints.length < 2) {
+      setRoadLine([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    setRoadLine([]);
+    void fetchRoadRoute(routingPoints, { signal: controller.signal, alternatives: points.length === 0, prefer: 'shortest' })
+      .then((result) => setRoadLine(result.points))
+      .catch(() => {
+        if (!controller.signal.aborted) setRoadLine([]);
+      });
+
+    return () => controller.abort();
+    // routingKey intentionally represents only coordinates so editing labels/fares does not reroute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routingKey]);
 
   const selectTerminal = (terminal: Terminal) => {
     if (mode === 'origin') onOriginChange(terminal);
@@ -59,7 +81,7 @@ export const RouteMapPicker: React.FC<RouteMapPickerProps> = ({ terminals, origi
       <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-72 w-full sm:h-80" attributionControl>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={18} attribution="&copy; OpenStreetMap contributors" />
         <MapClicker mode={mode} onMapClick={([latitude, longitude]) => onPointsChange([...points, { id: `waypoint-${Date.now()}-${points.length}`, latitude, longitude, label: '', regularFare: null, studentFare: null, seniorCitizenFare: null }])} />
-        {routeLine.length >= 2 && <Polyline positions={routeLine} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.85 }} />}
+        {roadLine.length >= 2 && <Polyline positions={roadLine} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.85 }} />}
         {terminals.map((terminal) => {
           const isOrigin = terminal.id === originTerminalId; const isDestination = terminal.id === destinationTerminalId;
           return <Marker key={terminal.id} position={[terminal.latitude, terminal.longitude]} icon={makeIcon(isOrigin ? '#16a34a' : isDestination ? '#ea580c' : '#1d4ed8', isOrigin ? 'A' : isDestination ? 'B' : '•')} eventHandlers={{ click: () => selectTerminal(terminal) }} />;

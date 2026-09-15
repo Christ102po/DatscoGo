@@ -49,7 +49,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
           : 'Your GPS location is unavailable right now. Check phone location services and try again.');
         setIsLocating(false);
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
     );
   };
 
@@ -135,7 +135,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
         setLocationMessage(`Live location refreshed at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
       },
       () => setLocationMessage('Live refresh needs location permission. Use Update location to retry.'),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
 
     return () => navigator.geolocation.clearWatch(watchId);

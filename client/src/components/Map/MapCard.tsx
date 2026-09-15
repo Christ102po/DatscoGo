@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from 'react-
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { isTripLocationStale, useTransit } from '../../contexts/TransitContext';
+import { fetchRoadRoute } from '../../lib/routing';
 
 // Fix default leaflet marker icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -126,7 +127,7 @@ interface GuidanceRouteState {
   points: [number, number][];
   distanceMeters: number | null;
   durationSeconds: number | null;
-  status: 'idle' | 'loading' | 'ready' | 'fallback' | 'error';
+  status: 'idle' | 'loading' | 'ready' | 'error';
 }
 
 const GuidanceViewport: React.FC<{
@@ -216,42 +217,32 @@ export const MapCard: React.FC<{
     }
 
     const controller = new AbortController();
-    const directPoints: [number, number][] = [
-      [userLocation.latitude, userLocation.longitude],
-      [guidedTerminal.latitude, guidedTerminal.longitude],
-    ];
-    setGuidanceRoute((current) => ({ ...current, status: 'loading' }));
+    setGuidanceRoute((current) => ({ ...current, points: [], distanceMeters: null, durationSeconds: null, status: 'loading' }));
 
     const loadRoadRoute = async () => {
       try {
-        const endpoint = `https://router.project-osrm.org/route/v1/driving/${userLocation.longitude},${userLocation.latitude};${guidedTerminal.longitude},${guidedTerminal.latitude}?overview=full&geometries=geojson&steps=false`;
-        const response = await fetch(endpoint, { signal: controller.signal });
-        if (!response.ok) throw new Error(`Routing service returned ${response.status}`);
-        const data = await response.json() as {
-          routes?: Array<{
-            distance?: number;
-            duration?: number;
-            geometry?: { coordinates?: [number, number][] };
-          }>;
-        };
-        const route = data.routes?.[0];
-        const coordinates = route?.geometry?.coordinates;
-        if (!route || !coordinates || coordinates.length < 2) throw new Error('No route found');
+        const route = await fetchRoadRoute(
+          [
+            [userLocation.latitude, userLocation.longitude],
+            [guidedTerminal.latitude, guidedTerminal.longitude],
+          ],
+          { signal: controller.signal, alternatives: true, prefer: 'shortest' },
+        );
 
         setGuidanceRoute({
-          points: coordinates.map(([longitude, latitude]) => [latitude, longitude]),
-          distanceMeters: typeof route.distance === 'number' ? route.distance : null,
-          durationSeconds: typeof route.duration === 'number' ? route.duration : null,
+          points: route.points,
+          distanceMeters: route.distanceMeters,
+          durationSeconds: route.durationSeconds,
           status: 'ready',
         });
-      } catch (error) {
+      } catch {
         if (controller.signal.aborted) return;
-        // Keep guidance usable even if the public road-routing service is temporarily unreachable.
+        // Never replace a failed road route with a misleading straight line.
         setGuidanceRoute({
-          points: directPoints,
+          points: [],
           distanceMeters: null,
           durationSeconds: null,
-          status: 'fallback',
+          status: 'error',
         });
       }
     };
@@ -358,7 +349,7 @@ export const MapCard: React.FC<{
               ) : (
                 <div className="mt-1 text-[10px] font-semibold leading-4 text-amber-700">Allow GPS so DatscoGo can guide you from your current location.</div>
               )}
-              {guidanceRoute.status === 'fallback' && userLocation && <div className="mt-1 text-[9px] leading-4 text-amber-700">Road routing is temporarily unavailable, so a direct guide line is shown.</div>}
+              {guidanceRoute.status === 'error' && userLocation && <div className="mt-1 text-[9px] leading-4 text-amber-700">Road routing is temporarily unavailable. DatscoGo will not draw an inaccurate straight-line route.</div>}
             </div>
             {onStopGuidance && (
               <button type="button" onClick={onStopGuidance} className="shrink-0 rounded-lg border border-slate-200 bg-white p-1.5 text-slate-500 transition hover:bg-slate-50 hover:text-slate-800" aria-label="Stop guidance" title="Stop guidance"><X size={14} /></button>

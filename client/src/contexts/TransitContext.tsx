@@ -129,11 +129,13 @@ interface TransitContextValue extends TransitStore {
   arriveTrip: (driverId: string) => void;
 }
 
-const STORAGE_KEY = 'datscogo-transit-store-v1';
-const SESSION_KEY = 'datscogo-session-v1';
+const STORAGE_KEY = 'datscogo-transit-store-v2';
+const SESSION_KEY = 'datscogo-session-v2';
 const PASSWORD_SALT = 'datscogo-v1:';
 
 const initialStore: TransitStore = {
+  // Keep only the administrator account. All operational transit data starts
+  // empty and is created from the admin dashboard.
   accounts: [
     {
       id: 'admin-1',
@@ -143,88 +145,10 @@ const initialStore: TransitStore = {
       passwordHash: 'f23f36eba2232bf1ca13855cb58386c1fbe29e884bc2ce0a646db4d60656c204',
       active: true,
     },
-    {
-      id: 'driver-1',
-      username: 'driver01',
-      displayName: 'Sample Driver',
-      role: 'driver',
-      passwordHash: 'f4ea23715862ffbeeeba9dc872d25d07806331dc2f59b41ad0ca77af2faa70c0',
-      active: true,
-    },
   ],
-  routes: [
-    {
-      id: 'route-general-luna-dapa',
-      title: 'General Luna → Dapa',
-      origin: 'General Luna Terminal',
-      destination: 'Dapa Terminal',
-      originTerminalId: 'terminal-general-luna',
-      destinationTerminalId: 'terminal-dapa',
-      type: 'bus',
-      fare: 30,
-      studentFare: 24,
-      seniorCitizenFare: 24,
-      eta: '30 mins',
-      duration: '30 min',
-      available: true,
-      coordinates: [[9.7895, 126.1554], [9.7865, 126.1305], [9.7702, 126.1002], [9.7578, 126.0689]],
-      waypoints: [
-        { id: 'gl-dapa-1', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan', regularFare: 15, studentFare: 12, seniorCitizenFare: 12 },
-        { id: 'gl-dapa-2', latitude: 9.7702, longitude: 126.1002, label: 'Union / Dapa–General Luna Road', regularFare: 25, studentFare: 20, seniorCitizenFare: 20 },
-      ],
-    },
-    {
-      id: 'route-dapa-general-luna',
-      title: 'Dapa → General Luna',
-      origin: 'Dapa Terminal',
-      destination: 'General Luna Terminal',
-      originTerminalId: 'terminal-dapa',
-      destinationTerminalId: 'terminal-general-luna',
-      type: 'bus',
-      fare: 30,
-      studentFare: 24,
-      seniorCitizenFare: 24,
-      eta: '30 mins',
-      duration: '30 min',
-      available: true,
-      coordinates: [[9.7578, 126.0689], [9.7702, 126.1002], [9.7865, 126.1305], [9.7895, 126.1554]],
-      waypoints: [
-        { id: 'dapa-gl-1', latitude: 9.7702, longitude: 126.1002, label: 'Union / Dapa–General Luna Road', regularFare: 15, studentFare: 12, seniorCitizenFare: 12 },
-        { id: 'dapa-gl-2', latitude: 9.7865, longitude: 126.1305, label: 'Catangnan', regularFare: 25, studentFare: 20, seniorCitizenFare: 20 },
-      ],
-    },
-    {
-      id: 'route-dapa-del-carmen',
-      title: 'Dapa → Del Carmen',
-      origin: 'Dapa Terminal',
-      destination: 'Del Carmen Terminal',
-      originTerminalId: 'terminal-dapa',
-      destinationTerminalId: 'terminal-del-carmen',
-      type: 'bus',
-      fare: 50,
-      studentFare: 40,
-      seniorCitizenFare: 40,
-      eta: '1 hr',
-      duration: '1 hr',
-      available: true,
-      coordinates: [[9.7578, 126.0689], [9.7912, 126.0366], [9.8354, 126.0048], [9.8789, 125.9750]],
-      waypoints: [
-        { id: 'dapa-dc-1', latitude: 9.7912, longitude: 126.0366, label: 'San Miguel / Dapa Road', regularFare: 20, studentFare: 16, seniorCitizenFare: 16 },
-        { id: 'dapa-dc-2', latitude: 9.8354, longitude: 126.0048, label: 'Del Carmen Access Road', regularFare: 40, studentFare: 32, seniorCitizenFare: 32 },
-      ],
-    },
-  ],
-  schedules: [
-    { id: 'schedule-1', routeId: 'route-general-luna-dapa', time: '4:15 – 4:50am', period: 'Morning', days: 'Monday – Saturday' },
-    { id: 'schedule-2', routeId: 'route-general-luna-dapa', time: '6:00 – 6:25am', period: 'Morning', days: 'Monday – Saturday' },
-    { id: 'schedule-3', routeId: 'route-general-luna-dapa', time: '12:45 – 1:15pm', period: 'Afternoon', days: 'Monday – Saturday' },
-    { id: 'schedule-4', routeId: 'route-dapa-general-luna', time: '7:00 – 7:25am', period: 'Morning', days: 'Monday – Saturday' },
-  ],
-  terminals: [
-    { id: 'terminal-dapa', name: 'Dapa Terminal', details: 'Main port · open 4:00am–6:00pm', latitude: 9.7578, longitude: 126.0689 },
-    { id: 'terminal-general-luna', name: 'General Luna Terminal', details: 'Town center · open 4:00am–6:00pm', latitude: 9.7895, longitude: 126.1554 },
-    { id: 'terminal-del-carmen', name: 'Del Carmen Terminal', details: 'Pier road · open 5:00am–5:00pm', latitude: 9.8789, longitude: 125.9750 },
-  ],
+  routes: [],
+  schedules: [],
+  terminals: [],
   activeTrips: [],
   announcements: [],
   contact: { facebook: '', phone: '', email: '' },
@@ -362,6 +286,9 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
+    // This release intentionally starts without the previous demo transit data.
+    localStorage.removeItem('datscogo-transit-store-v1');
+    localStorage.removeItem('datscogo-session-v1');
     const restored = storedValue<StoredTransitStore>(STORAGE_KEY);
     const restoredSession = storedValue<{ userId: string }>(SESSION_KEY);
     if (restored?.accounts && restored?.routes && restored?.schedules && restored?.terminals) {

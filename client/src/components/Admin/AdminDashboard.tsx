@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BellRing,
   BusFront,
@@ -21,6 +21,7 @@ import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { RouteMapPicker } from './RouteMapPicker';
 import { TerminalLocationPicker } from './TerminalLocationPicker';
 import { RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
+import { fetchRoadRoute } from '../../lib/routing';
 
 type Section = 'overview' | 'routes' | 'schedules' | 'terminals' | 'announcements' | 'drivers' | 'security';
 type Notice = { error?: boolean; text: string } | null;
@@ -101,7 +102,7 @@ function RouteManager({ onNotice }: { onNotice: (message: string, error?: boolea
     setWaypoints((current) => current.map((point, pointIndex) => pointIndex === index ? { ...point, ...changes } : point));
   };
 
-  const save = (event: React.FormEvent) => {
+  const save = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!draft.title.trim() || !origin || !destination || !draft.eta.trim() || !draft.duration.trim() || draft.fare < 0) {
       return onNotice('Add a route name, select both terminals on the map, and complete the route details.', true);
@@ -125,16 +126,31 @@ function RouteManager({ onNotice }: { onNotice: (message: string, error?: boolea
       if (regular !== null && regular !== undefined && senior !== null && senior !== undefined && senior > regular) return onNotice(`Senior Citizen fare for ${stop.label} cannot be higher than its regular fare.`, true);
     }
 
+    const routeAnchors: [number, number][] = [
+      [origin.latitude, origin.longitude],
+      ...waypoints.map((point) => [point.latitude, point.longitude] as [number, number]),
+      [destination.latitude, destination.longitude],
+    ];
+
+    let routeCoordinates = routeAnchors;
+    if (draft.type === 'bus') {
+      try {
+        const roadRoute = await fetchRoadRoute(routeAnchors, {
+          alternatives: waypoints.length === 0,
+          prefer: 'shortest',
+        });
+        routeCoordinates = roadRoute.points;
+      } catch {
+        return onNotice('The road route could not be calculated right now. Check your internet connection and try saving again so DatscoGo does not publish an inaccurate straight-line route.', true);
+      }
+    }
+
     const payload: Omit<TransitRoute, 'id'> = {
       ...draft,
       discountedFare: undefined,
       title: draft.title.trim(),
       waypoints: waypoints.map((point) => ({ ...point, label: point.label.trim() })),
-      coordinates: [
-        [origin.latitude, origin.longitude],
-        ...waypoints.map((point) => [point.latitude, point.longitude] as [number, number]),
-        [destination.latitude, destination.longitude],
-      ],
+      coordinates: routeCoordinates,
     };
 
     if (editingId) {
@@ -375,6 +391,16 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   const [driver, setDriver] = useState({ displayName: '', username: '', password: '' });
   const [schedule, setSchedule] = useState({ routeId: routes[0]?.id ?? '', time: '', period: 'Morning' as 'Morning' | 'Afternoon', days: 'Monday – Saturday' });
   const [password, setPassword] = useState({ current: '', next: '' });
+
+  useEffect(() => {
+    if (routes.length === 0) {
+      if (schedule.routeId) setSchedule((current) => ({ ...current, routeId: '' }));
+      return;
+    }
+    if (!routes.some((route) => route.id === schedule.routeId)) {
+      setSchedule((current) => ({ ...current, routeId: routes[0].id }));
+    }
+  }, [routes, schedule.routeId]);
 
   const drivers = accounts.filter((account) => account.role === 'driver');
   const liveTripCount = activeTrips.filter((trip) => trip.status === 'departed').length;
