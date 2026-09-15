@@ -21,7 +21,7 @@ type PassengerScreen = 'home' | 'datsco-routes' | 'schedule' | 'terminal';
 type DeviceLocation = { latitude: number; longitude: number };
 
 export default function HomeTabScreen() {
-  const { currentUser, login, logout, announcements, schedules, routes, terminals, contact } = useTransit();
+  const { currentUser, isReady, login, logout, announcements, schedules, routes, terminals, contact } = useTransit();
   const [activeTab, setActiveTab] = useState<PassengerTab | null>(null);
   const [currentScreen, setCurrentScreen] = useState<PassengerScreen>('home');
   const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
@@ -40,6 +40,25 @@ export default function HomeTabScreen() {
   const [locationStatus, setLocationStatus] = useState('Location access has not been requested yet.');
   const [showLocationPermission, setShowLocationPermission] = useState(false);
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
+
+  // Restore the authenticated workspace after the installed app/PWA is closed and reopened.
+  // TransitContext already persists the signed-in account in localStorage; this keeps the
+  // visible workspace in sync with that restored session instead of defaulting to passenger.
+  useEffect(() => {
+    if (!isReady) return;
+
+    if (currentUser?.role === 'driver') {
+      setWorkspace('driver');
+      return;
+    }
+
+    if (currentUser?.role === 'admin') {
+      setWorkspace('admin');
+      return;
+    }
+
+    setWorkspace('passenger');
+  }, [isReady, currentUser?.id, currentUser?.role]);
 
   const activeAnnouncements = useMemo(
     () => announcements.filter((announcement) => announcement.active).sort((a, b) => b.createdAt - a.createdAt),
