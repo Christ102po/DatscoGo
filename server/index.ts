@@ -1,114 +1,330 @@
-import express from "express";
-import { createServer } from "http";
-import path from "path";
-import { fileURLToPath } from "url";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import express, { type NextFunction, type Request, type Response } from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  arriveDriverTrip,
+  clearOperationalData,
+  createDriver,
+  createRoute,
+  createSchedule,
+  createTerminal,
+  deleteDriver,
+  deleteRoute,
+  deleteSchedule,
+  deleteTerminal,
+  getAdminTrips,
+  loadData,
+  publicSnapshot,
+  startDriverTrip,
+  updateDriver,
+  updateDriverLocation,
+  updateRoute,
+  updateSchedule,
+  updateTerminal,
+} from "./datscoStore";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const app = express();
+const port = Number(process.env.PORT || 3000);
+const adminKey = process.env.ADMIN_KEY || "datscogo-admin-2026";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const runningFromDist = path.basename(__dirname) === "dist";
+const isProduction = process.env.NODE_ENV === "production" || runningFromDist;
 
-const dataDirectory = process.env.DATSCO_DATA_DIR || path.resolve(process.cwd(), "data");
-const publicStatePath = path.join(dataDirectory, "datscogo-public-state-v2.json");
-const tripsPath = path.join(dataDirectory, "datscogo-trips-v2.json");
+app.disable("x-powered-by");
+app.use(express.json({ limit: "1mb" }));
 
-type JsonObject = Record<string, unknown>;
+// Public/user APIs are intentionally accessible from the Capacitor Android WebView.
+// Admin mutations still require the private x-admin-key header.
+app.use("/api", (req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-admin-key");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
 
-async function ensureDataDirectory() {
-  await mkdir(dataDirectory, { recursive: true });
+function noStore(_req: Request, res: Response, next: NextFunction) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+}
+app.use("/api", noStore);
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const provided = String(req.header("x-admin-key") || "");
+  if (!provided || provided !== adminKey) {
+    res.status(401).json({ error: "Invalid admin access key." });
+    return;
+  }
+  next();
 }
 
-async function readJson<T>(filePath: string, fallback: T): Promise<T> {
-  try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
-  } catch {
-    return fallback;
+function asyncRoute(handler: (req: Request, res: Response) => Promise<void>) {
+  return (req: Request, res: Response) => {
+    handler(req, res).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Unexpected server error.";
+      res.status(400).json({ error: message });
+    });
+  };
+}
+
+type SseClient = Response;
+const liveClients = new Set<SseClient>();
+
+function broadcast(type: string, payload: unknown) {
+  const message = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of [...liveClients]) {
+    try {
+      client.write(message);
+    } catch {
+      liveClients.delete(client);
+    }
   }
 }
 
-async function writeJson(filePath: string, value: unknown) {
-  await ensureDataDirectory();
-  await writeFile(filePath, JSON.stringify(value, null, 2), "utf8");
+async function broadcastSnapshot() {
+  const data = await loadData();
+  broadcast("snapshot", publicSnapshot(data));
 }
 
-async function startServer() {
-  const app = express();
-  const server = createServer(app);
+app.get(
+  "/api/datsco/snapshot",
+  asyncRoute(async (_req, res) => {
+    const data = await loadData();
+    res.json(publicSnapshot(data));
+  }),
+);
 
-  app.use(express.json({ limit: "1mb" }));
+app.get("/api/datsco/live", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders?.();
+  liveClients.add(res);
 
-  // Security hardening headers middleware
-  app.use((req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "SAMEORIGIN");
-    res.setHeader("X-XSS-Protection", "1; mode=block");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self' https://*.openstreetmap.org https://cdnjs.cloudflare.com https://images.unsplash.com https://*.tile.openstreetmap.org https://www.google.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; img-src 'self' data: https: http:; connect-src 'self' https://*.openstreetmap.org https://router.project-osrm.org;"
-    );
-    next();
-  });
-
-  // Shared public transit configuration. This lets route/schedule/terminal edits
-  // and announcements made by an administrator reach other devices using the
-  // same hosted DatscoGo instance.
-  app.get("/api/public-state", async (_req, res) => {
-    const state = await readJson<JsonObject>(publicStatePath, {});
-    res.setHeader("Cache-Control", "no-store");
-    res.json(state);
-  });
-
-  app.put("/api/public-state", async (req, res) => {
-    const body = req.body;
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return res.status(400).json({ ok: false, error: "Invalid public transit state." });
+  const data = await loadData();
+  res.write(`event: snapshot\ndata: ${JSON.stringify(publicSnapshot(data))}\n\n`);
+  const keepAlive = setInterval(() => {
+    try {
+      res.write(`: keep-alive ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(keepAlive);
+      liveClients.delete(res);
     }
-    await writeJson(publicStatePath, body);
-    res.json({ ok: true });
+  }, 20_000);
+
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    liveClients.delete(res);
   });
-
-  // Live vehicle positions are saved separately so a driver's frequent GPS
-  // updates never overwrite route edits or announcements from the admin.
-  app.get("/api/trips", async (_req, res) => {
-    const trips = await readJson<unknown[]>(tripsPath, []);
-    res.setHeader("Cache-Control", "no-store");
-    res.json(Array.isArray(trips) ? trips : []);
-  });
-
-  app.put("/api/trips/:driverId", async (req, res) => {
-    const driverId = String(req.params.driverId || "").trim();
-    const trip = req.body;
-    if (!driverId || !trip || typeof trip !== "object" || Array.isArray(trip) || String(trip.driverId || "") !== driverId) {
-      return res.status(400).json({ ok: false, error: "Invalid live trip update." });
-    }
-
-    const trips = await readJson<JsonObject[]>(tripsPath, []);
-    const nextTrips = [
-      ...trips.filter((item) => String(item.driverId || "") !== driverId),
-      trip as JsonObject,
-    ];
-    await writeJson(tripsPath, nextTrips);
-    res.json({ ok: true });
-  });
-
-  // Serve static files from dist/public in production
-  const staticPath =
-    process.env.NODE_ENV === "production"
-      ? path.resolve(__dirname, "public")
-      : path.resolve(__dirname, "..", "dist", "public");
-
-  app.use(express.static(staticPath));
-
-  // Handle client-side routing - serve index.html for all routes
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(staticPath, "index.html"));
-  });
-
-  const port = Number(process.env.PORT) || 3000;
-
-server.listen(port, "0.0.0.0", () => {
-  console.log(`DatscoGo running on port ${port}`);
 });
+
+app.get("/api/datsco/admin/verify", requireAdmin, (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.get(
+  "/api/datsco/admin/trips",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    res.json(await getAdminTrips());
+  }),
+);
+
+app.post(
+  "/api/datsco/admin/terminals",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await createTerminal(req.body);
+    await broadcastSnapshot();
+    res.status(201).json(item);
+  }),
+);
+
+app.put(
+  "/api/datsco/admin/terminals/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await updateTerminal(req.params.id, req.body);
+    await broadcastSnapshot();
+    res.json(item);
+  }),
+);
+
+app.delete(
+  "/api/datsco/admin/terminals/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    await deleteTerminal(req.params.id);
+    await broadcastSnapshot();
+    res.status(204).end();
+  }),
+);
+
+app.post(
+  "/api/datsco/admin/routes",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await createRoute(req.body);
+    await broadcastSnapshot();
+    res.status(201).json(item);
+  }),
+);
+
+app.put(
+  "/api/datsco/admin/routes/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await updateRoute(req.params.id, req.body);
+    await broadcastSnapshot();
+    res.json(item);
+  }),
+);
+
+app.delete(
+  "/api/datsco/admin/routes/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    await deleteRoute(req.params.id);
+    await broadcastSnapshot();
+    res.status(204).end();
+  }),
+);
+
+app.post(
+  "/api/datsco/admin/schedules",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await createSchedule(req.body);
+    await broadcastSnapshot();
+    res.status(201).json(item);
+  }),
+);
+
+app.put(
+  "/api/datsco/admin/schedules/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await updateSchedule(req.params.id, req.body);
+    await broadcastSnapshot();
+    res.json(item);
+  }),
+);
+
+app.delete(
+  "/api/datsco/admin/schedules/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    await deleteSchedule(req.params.id);
+    await broadcastSnapshot();
+    res.status(204).end();
+  }),
+);
+
+app.post(
+  "/api/datsco/admin/drivers",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await createDriver(req.body);
+    await broadcastSnapshot();
+    res.status(201).json(item);
+  }),
+);
+
+app.put(
+  "/api/datsco/admin/drivers/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    const item = await updateDriver(req.params.id, req.body);
+    await broadcastSnapshot();
+    res.json(item);
+  }),
+);
+
+app.delete(
+  "/api/datsco/admin/drivers/:id",
+  requireAdmin,
+  asyncRoute(async (req, res) => {
+    await deleteDriver(req.params.id);
+    await broadcastSnapshot();
+    res.status(204).end();
+  }),
+);
+
+app.post(
+  "/api/datsco/admin/clear",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    await clearOperationalData();
+    await broadcastSnapshot();
+    res.json({ ok: true });
+  }),
+);
+
+app.post(
+  "/api/datsco/driver-trip/start",
+  asyncRoute(async (req, res) => {
+    const result = await startDriverTrip(req.body);
+    broadcast("trip-started", result);
+    await broadcastSnapshot();
+    res.status(201).json({ ok: true, ...result });
+  }),
+);
+
+app.post(
+  "/api/datsco/driver-location",
+  asyncRoute(async (req, res) => {
+    const result = await updateDriverLocation(req.body);
+    broadcast("driver-location", result);
+    res.json({ ok: true, ...result });
+  }),
+);
+
+app.post(
+  "/api/datsco/driver-trip/arrive",
+  asyncRoute(async (req, res) => {
+    const result = await arriveDriverTrip(req.body);
+    broadcast("trip-arrived", result);
+    await broadcastSnapshot();
+    res.json({ ok: true, ...result });
+  }),
+);
+
+app.get("/api/health", (_req, res) => res.json({ ok: true, liveClients: liveClients.size }));
+
+async function start() {
+  if (isProduction) {
+    const publicDir = path.resolve(__dirname, "public");
+    app.use(express.static(publicDir, { etag: true, maxAge: "1h" }));
+    app.get("*", (_req, res) => res.sendFile(path.join(publicDir, "index.html")));
+  } else {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  }
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`DatscoGo running on http://localhost:${port}`);
+    if (!process.env.ADMIN_KEY) {
+      console.warn("ADMIN_KEY is not set. Local default is datscogo-admin-2026. Set ADMIN_KEY before deployment.");
+    }
+    console.log(
+      process.env.DATSCO_DATA_FILE
+        ? `Persistent data file: ${process.env.DATSCO_DATA_FILE}`
+        : `Data file: ${path.resolve(process.cwd(), "data", "datscogo.json")}`,
+    );
+  });
 }
 
-startServer().catch(console.error);
+start().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
