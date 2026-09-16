@@ -22,6 +22,9 @@ importers:
       '@capacitor/core':
         specifier: ^8.5.2
         version: 8.5.2
+      '@capacitor/local-notifications':
+        specifier: 7.0.7
+        version: 7.0.7(@capacitor/core@8.5.2)
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.64.0(react@19.2.1))
@@ -871,6 +874,11 @@ packages:
 
   '@capacitor/core@8.5.2':
     resolution: {integrity: sha512-agnQbGdhGw/KZFuLf7H9SY2o+oE7upkr/WPQsYaokXP6f9chaE8iVmbKkfN6SVl4w3pmz7oZ3Ur1hbkmy1hx+w==}
+
+  '@capacitor/local-notifications@7.0.7':
+    resolution: {integrity: sha512-3qSpa8PpVMONHqBOaJ4RbA/lB5vOdEngtep0myGmP3S56gShPScDCotbw7dwmQy3NCdY4Up9nH3ySrGvUh2jZg==}
+    peerDependencies:
+      '@capacitor/core': '>=7.0.0'
 
   '@chevrotain/cst-dts-gen@11.0.3':
     resolution: {integrity: sha512-BvIKpRLeS/8UbfxXxgC33xOumsacaeCKAjAeLyOn7Pcp95HiRbrpl14S+9vaZLolnbssPIUuiUd8IvgkRyt6NQ==}
@@ -6057,6 +6065,10 @@ snapshots:
   '@capacitor/core@8.5.2':
     dependencies:
       tslib: 2.8.1
+
+  '@capacitor/local-notifications@7.0.7(@capacitor/core@8.5.2)':
+    dependencies:
+      '@capacitor/core': 8.5.2
 
   '@chevrotain/cst-dts-gen@11.0.3':
     dependencies:
