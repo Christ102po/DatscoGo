@@ -2,6 +2,16 @@ import express, { type NextFunction, type Request, type Response } from "express
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  databaseHealth,
+  getCurrentTrips,
+  getPublicTransitState,
+  getTripHistory,
+  initPostgresTransitStore,
+  replacePublicTransitState,
+  upsertTrip,
+} from "./postgresTransitStore";
+
+import {
   arriveDriverTrip,
   clearOperationalData,
   createDriver,
@@ -77,7 +87,7 @@ const liveClients = new Set<SseClient>();
 
 function broadcast(type: string, payload: unknown) {
   const message = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const client of [...liveClients]) {
+  for (const client of Array.from(liveClients)) {
     try {
       client.write(message);
     } catch {
@@ -90,6 +100,48 @@ async function broadcastSnapshot() {
   const data = await loadData();
   broadcast("snapshot", publicSnapshot(data));
 }
+
+// Final-UI shared transit state. These endpoints are backed by PostgreSQL so
+// admin changes and driver trip updates are shared across phones/devices.
+app.get(
+  "/api/public-state",
+  asyncRoute(async (_req, res) => {
+    res.json(await getPublicTransitState());
+  }),
+);
+
+app.put(
+  "/api/public-state",
+  asyncRoute(async (req, res) => {
+    const state = await replacePublicTransitState(req.body);
+    broadcast("public-state", state);
+    res.json(state);
+  }),
+);
+
+app.get(
+  "/api/trips",
+  asyncRoute(async (_req, res) => {
+    res.json(await getCurrentTrips());
+  }),
+);
+
+app.put(
+  "/api/trips/:driverId",
+  asyncRoute(async (req, res) => {
+    const trip = await upsertTrip(req.params.driverId, req.body);
+    broadcast("shared-trip", trip);
+    res.json(trip);
+  }),
+);
+
+app.get(
+  "/api/trip-history",
+  requireAdmin,
+  asyncRoute(async (_req, res) => {
+    res.json(await getTripHistory());
+  }),
+);
 
 app.get(
   "/api/datsco/snapshot",
@@ -295,9 +347,22 @@ app.post(
   }),
 );
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, liveClients: liveClients.size }));
+app.get(
+  "/api/health",
+  asyncRoute(async (_req, res) => {
+    const database = await databaseHealth();
+    res.json({ ok: true, database, liveClients: liveClients.size });
+  }),
+);
 
 async function start() {
+  if (process.env.DATABASE_URL) {
+    await initPostgresTransitStore();
+    console.log("PostgreSQL transit store ready.");
+  } else {
+    console.warn("DATABASE_URL is not set. Shared PostgreSQL transit sync is disabled in this environment.");
+  }
+
   if (isProduction) {
     const publicDir = path.resolve(__dirname, "public");
     app.use(express.static(publicDir, { etag: true, maxAge: "1h" }));
@@ -316,10 +381,11 @@ async function start() {
     if (!process.env.ADMIN_KEY) {
       console.warn("ADMIN_KEY is not set. Local default is datscogo-admin-2026. Set ADMIN_KEY before deployment.");
     }
+    console.log("Shared final-UI transit data: PostgreSQL (DATABASE_URL).");
     console.log(
       process.env.DATSCO_DATA_FILE
-        ? `Persistent data file: ${process.env.DATSCO_DATA_FILE}`
-        : `Data file: ${path.resolve(process.cwd(), "data", "datscogo.json")}`,
+        ? `Legacy /api/datsco store: ${process.env.DATSCO_DATA_FILE}`
+        : `Legacy /api/datsco store: ${path.resolve(process.cwd(), "data", "datscogo.json")}`,
     );
   });
 }

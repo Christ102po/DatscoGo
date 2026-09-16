@@ -103,7 +103,7 @@ type StoredTransitStore = Omit<TransitStore, 'activeTrips' | 'announcements'> & 
   announcements?: Announcement[];
 };
 
-type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'announcements' | 'contact'>;
+type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'announcements' | 'contact'> & { initialized?: boolean };
 
 interface TransitContextValue extends TransitStore {
   currentUser: Omit<Account, 'passwordHash'> | null;
@@ -126,7 +126,7 @@ interface TransitContextValue extends TransitStore {
   toggleAnnouncement: (announcementId: string) => void;
   startTrip: (driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => void;
   updateTripLocation: (driverId: string, location: { latitude: number; longitude: number }) => void;
-  arriveTrip: (driverId: string) => void;
+  arriveTrip: (driverId: string, location?: { latitude: number; longitude: number }) => void;
 }
 
 const STORAGE_KEY = 'datscogo-transit-store-v2';
@@ -333,6 +333,22 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
         const remoteTrips = tripsResponse.ok ? await tripsResponse.json() as ActiveTrip[] : null;
         if (cancelled) return;
 
+        // On the very first PostgreSQL deployment, keep existing admin-created
+        // local data and seed it to the empty database once. After initialization,
+        // PostgreSQL is authoritative, including when the administrator clears data.
+        if (publicState?.initialized === false) {
+          const local = storeRef.current;
+          const hasLocalOperationalData = local.routes.length > 0
+            || local.schedules.length > 0
+            || local.terminals.length > 0
+            || local.announcements.length > 0
+            || Boolean(local.contact.facebook || local.contact.phone || local.contact.email);
+          if (hasLocalOperationalData) {
+            await publishPublicState(local);
+            return;
+          }
+        }
+
         setStore((current) => {
           const next: TransitStore = {
             ...current,
@@ -505,11 +521,13 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     void publishTrip(nextTrip);
   }, [replaceStore]);
 
-  const arriveTrip = useCallback((driverId: string) => {
+  const arriveTrip = useCallback((driverId: string, location?: { latitude: number; longitude: number }) => {
     const current = storeRef.current;
     const existing = current.activeTrips.find((trip) => trip.driverId === driverId);
     if (!existing) return;
-    const arrivalLocation = getArrivalLocation(existing, current.routes, current.terminals);
+    // Keep the driver's real GPS position at arrival. Fall back to the latest
+    // reported vehicle position rather than snapping the marker to a terminal.
+    const arrivalLocation = location ?? { latitude: existing.latitude, longitude: existing.longitude };
     const nextTrip: ActiveTrip = { ...existing, status: 'arrived', ...arrivalLocation, lastUpdated: Date.now() };
     replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId ? nextTrip : trip) }));
     void publishTrip(nextTrip);

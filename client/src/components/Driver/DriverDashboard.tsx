@@ -87,6 +87,11 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
     useDeviceLocation((location) => updateTripLocation(currentUser.id, location));
   };
 
+  const handleArrival = () => {
+    if (!ownTrip || !currentUser) return;
+    useDeviceLocation((location) => arriveTrip(currentUser.id, location));
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -195,7 +200,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
               ) : (
                 <button type="button" disabled={isLocating} onClick={handleLocationUpdate} className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"><RefreshCw className={isLocating ? 'animate-spin' : ''} size={18} /> {isLocating ? 'Getting location…' : 'Update location'}</button>
               )}
-              {ownTrip?.status === 'departed' && <button type="button" onClick={() => currentUser && arriveTrip(currentUser.id)} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"><CheckCircle2 size={18} /> Mark as arrived</button>}
+              {ownTrip?.status === 'departed' && <button type="button" onClick={handleArrival} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"><CheckCircle2 size={18} /> Mark as arrived</button>}
             </div>
             <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-500"><MapPin size={15} className="mt-0.5 shrink-0 text-blue-600" /> {locationMessage} Passengers see the latest saved vehicle position in their DatscoGo view.</p>
             <div className="mt-4"><DriverLocationMap location={deviceLocation ?? (ownTrip ? { latitude: ownTrip.latitude, longitude: ownTrip.longitude } : null)} route={tripRoute ?? selectedRoute} /></div>

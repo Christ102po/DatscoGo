@@ -217,7 +217,7 @@ function currentPublicTrips(data: DatscoData): PublicTrip[] {
       latestArrivedByDriver.set(trip.driverId, trip);
     }
   }
-  return [...active, ...latestArrivedByDriver.values()].map(publicTrip);
+  return active.concat(Array.from(latestArrivedByDriver.values())).map(publicTrip);
 }
 
 export function publicSnapshot(data: DatscoData) {

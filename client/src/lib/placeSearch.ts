@@ -44,7 +44,7 @@ export function buildSearchPlaces(data: Snapshot): SearchPlace[] {
     }
   }
 
-  return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function searchPlaces(all: SearchPlace[], query: string, limit = 8): SearchPlace[] {

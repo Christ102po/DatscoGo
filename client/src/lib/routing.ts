@@ -8,6 +8,20 @@ export type RoadRoute = {
   durationSeconds: number;
 };
 
+export type RoutePoint = [number, number];
+
+export type FetchRoadRouteOptions = {
+  signal?: AbortSignal;
+  alternatives?: boolean;
+  prefer?: "shortest" | "fastest";
+};
+
+export type FetchRoadRouteResult = {
+  points: RoutePoint[];
+  distanceMeters: number;
+  durationSeconds: number;
+};
+
 function coords(points: LatLng[]) {
   return points.map((point) => `${point.lng},${point.lat}`).join(";");
 }
@@ -25,6 +39,47 @@ export async function roadRoute(points: LatLng[]): Promise<RoadRoute> {
     points: route.geometry.coordinates.map(([lng, lat]: [number, number]) => ({ lat, lng })),
     distanceMeters: route.distance,
     durationSeconds: route.duration,
+  };
+}
+
+/**
+ * Tuple-coordinate version used by the existing map/admin components.
+ * Input/output points are [latitude, longitude]. OSRM itself expects lng,lat.
+ */
+export async function fetchRoadRoute(
+  points: RoutePoint[],
+  options: FetchRoadRouteOptions = {},
+): Promise<FetchRoadRouteResult> {
+  if (points.length < 2) throw new Error("At least two map points are required.");
+
+  const routeCoordinates = points
+    .map(([latitude, longitude]) => `${longitude},${latitude}`)
+    .join(";");
+  const alternatives = options.alternatives ?? true;
+  const response = await fetch(
+    `${OSRM_BASE}/route/v1/driving/${routeCoordinates}?overview=full&geometries=geojson&steps=false&alternatives=${alternatives}`,
+    { signal: options.signal },
+  );
+
+  if (!response.ok) throw new Error("The road routing service is currently unavailable.");
+  const data = await response.json();
+  if (data.code !== "Ok" || !Array.isArray(data.routes) || data.routes.length === 0) {
+    throw new Error("No drivable road route was found.");
+  }
+
+  const availableRoutes = data.routes as Array<{
+    distance: number;
+    duration: number;
+    geometry: { coordinates: Array<[number, number]> };
+  }>;
+  const route = options.prefer === "shortest"
+    ? Array.from(availableRoutes).sort((a, b) => Number(a.distance) - Number(b.distance))[0]
+    : availableRoutes[0];
+
+  return {
+    points: route.geometry.coordinates.map(([longitude, latitude]) => [latitude, longitude] as RoutePoint),
+    distanceMeters: Number(route.distance),
+    durationSeconds: Number(route.duration),
   };
 }
 

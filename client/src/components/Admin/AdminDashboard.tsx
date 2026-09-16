@@ -114,7 +114,8 @@ function RouteManager({ onNotice }: { onNotice: (message: string, error?: boolea
       return onNotice('Senior Citizen discount fare must be between ₱0 and the regular full-route fare.', true);
     }
 
-    for (const [index, stop] of waypoints.entries()) {
+    for (let index = 0; index < waypoints.length; index += 1) {
+      const stop = waypoints[index];
       if (!stop.label.trim()) return onNotice(`Enter the barangay or stop name for passing point ${index + 1}.`, true);
       const regular = stop.regularFare;
       const student = stop.studentFare;
