@@ -130,6 +130,21 @@ interface GuidanceRouteState {
   status: 'idle' | 'loading' | 'ready' | 'error';
 }
 
+const UserLocationViewport: React.FC<{
+  userLocation: { latitude: number; longitude: number };
+}> = ({ userLocation }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    map.flyTo([userLocation.latitude, userLocation.longitude], Math.max(map.getZoom(), 15), {
+      animate: true,
+      duration: 0.7,
+    });
+  }, [map, userLocation.latitude, userLocation.longitude]);
+
+  return null;
+};
+
 const GuidanceViewport: React.FC<{
   userLocation: { latitude: number; longitude: number };
   terminal: { latitude: number; longitude: number };
@@ -267,6 +282,9 @@ export const MapCard: React.FC<{
           style={{ zIndex: 10 }}
         >
           <MapSizeInvalidator />
+          {userLocation && !focusedTerminalId && !focusedSearchDestination && !guidedTerminal && (
+            <UserLocationViewport userLocation={userLocation} />
+          )}
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={18}

@@ -78,7 +78,8 @@ export const SearchCard: React.FC<SearchCardProps> = ({
               type="button"
               onClick={() => {
                 onClear();
-                setIsFocused(true);
+                setIsFocused(false);
+                (document.activeElement as HTMLElement | null)?.blur();
               }}
               className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
               aria-label="Clear destination search"
