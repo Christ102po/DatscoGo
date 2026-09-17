@@ -243,6 +243,18 @@ async function publishPublicState(store: TransitStore) {
   }
 }
 
+async function publishAccounts(accounts: Account[]) {
+  try {
+    await fetch('/api/accounts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(accounts),
+    });
+  } catch {
+    // Local development can continue with localStorage if the shared API is unavailable.
+  }
+}
+
 async function publishTrip(trip: ActiveTrip) {
   try {
     await fetch(`/api/trips/${encodeURIComponent(trip.driverId)}`, {
@@ -325,17 +337,20 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
 
     const refresh = async () => {
       try {
-        const [publicResponse, tripsResponse] = await Promise.all([
+        const [publicResponse, tripsResponse, accountsResponse] = await Promise.all([
           fetch('/api/public-state', { cache: 'no-store' }),
           fetch('/api/trips', { cache: 'no-store' }),
+          fetch('/api/accounts', { cache: 'no-store' }),
         ]);
         const publicState = publicResponse.ok ? await publicResponse.json() as Partial<PublicTransitState> : null;
         const remoteTrips = tripsResponse.ok ? await tripsResponse.json() as ActiveTrip[] : null;
+        const remoteAccounts = accountsResponse.ok ? await accountsResponse.json() as Account[] : null;
         if (cancelled) return;
 
         setStore((current) => {
           const next: TransitStore = {
             ...current,
+            accounts: Array.isArray(remoteAccounts) ? remoteAccounts : current.accounts,
             routes: Array.isArray(publicState?.routes) ? publicState!.routes.map((route) => normalizeRoute(route, Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals)) : current.routes,
             schedules: Array.isArray(publicState?.schedules) ? publicState!.schedules : current.schedules,
             terminals: Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals,
@@ -359,11 +374,12 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     };
   }, []);
 
-  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore, syncPublic = false) => {
+  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore, syncPublic = false, syncAccounts = false) => {
     setStore((current) => {
       const next = updater(current);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       if (syncPublic) void publishPublicState(next);
+      if (syncAccounts) void publishAccounts(next.accounts);
       return next;
     });
   }, []);
@@ -398,7 +414,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     replaceStore((current) => ({
       ...current,
       accounts: [...current.accounts, { id: createId('driver'), username: normalizedUsername, displayName: displayName.trim() || normalizedUsername, role: 'driver', passwordHash, active: true }],
-    }));
+    }), false, true);
     return { ok: true };
   }, [replaceStore, store.accounts]);
 
@@ -407,7 +423,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
       ...current,
       accounts: current.accounts.filter((account) => account.id !== driverId || account.role !== 'driver'),
       activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
-    }));
+    }), false, true);
   }, [replaceStore]);
 
   const setAdminPassword = useCallback(async (currentPassword: string, newPassword: string) => {
@@ -415,7 +431,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     const admin = store.accounts.find((account) => account.role === 'admin');
     if (!admin || admin.passwordHash !== await digestPassword(currentPassword)) return { ok: false, error: 'Your current password is incorrect.' };
     const passwordHash = await digestPassword(newPassword);
-    replaceStore((current) => ({ ...current, accounts: current.accounts.map((account) => account.id === admin.id ? { ...account, passwordHash } : account) }));
+    replaceStore((current) => ({ ...current, accounts: current.accounts.map((account) => account.id === admin.id ? { ...account, passwordHash } : account) }), false, true);
     return { ok: true };
   }, [replaceStore, store.accounts]);
 
