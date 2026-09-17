@@ -232,16 +232,16 @@ function publicStateFrom(store: TransitStore): PublicTransitState {
 }
 
 async function publishPublicState(store: TransitStore) {
-  try {
-    await fetch('/api/public-state', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(publicStateFrom(store)),
-    });
-  } catch {
-    // Local development can run without the Express API; localStorage remains functional.
+  const response = await fetch('/api/public-state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(publicStateFrom(store)),
+  });
+  if (!response.ok) {
+    throw new Error(`Unable to save shared transit data (${response.status}).`);
   }
 }
+
 
 async function publishAccounts(accounts: Account[]) {
   try {
@@ -296,6 +296,10 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   const storeRef = useRef<TransitStore>(initialStore);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
+  // Prevent the 2.5-second server poll from replacing a just-created admin
+  // change with an older database snapshot while that change is still saving.
+  const publicWriteVersionRef = useRef(0);
+  const publicWritePendingRef = useRef(false);
 
   useEffect(() => {
     // This release intentionally starts without the previous demo transit data.
@@ -348,14 +352,18 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
         if (cancelled) return;
 
         setStore((current) => {
+          // While an admin public-state write is in flight, keep the local public
+          // fields. Otherwise an older GET response can make a new schedule
+          // appear briefly and then disappear before PostgreSQL finishes saving it.
+          const acceptRemotePublicState = !publicWritePendingRef.current;
           const next: TransitStore = {
             ...current,
             accounts: Array.isArray(remoteAccounts) ? remoteAccounts : current.accounts,
-            routes: Array.isArray(publicState?.routes) ? publicState!.routes.map((route) => normalizeRoute(route, Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals)) : current.routes,
-            schedules: Array.isArray(publicState?.schedules) ? publicState!.schedules : current.schedules,
-            terminals: Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals,
-            announcements: Array.isArray(publicState?.announcements) ? publicState!.announcements : current.announcements,
-            contact: publicState?.contact ?? current.contact,
+            routes: acceptRemotePublicState && Array.isArray(publicState?.routes) ? publicState!.routes.map((route) => normalizeRoute(route, Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals)) : current.routes,
+            schedules: acceptRemotePublicState && Array.isArray(publicState?.schedules) ? publicState!.schedules : current.schedules,
+            terminals: acceptRemotePublicState && Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals,
+            announcements: acceptRemotePublicState && Array.isArray(publicState?.announcements) ? publicState!.announcements : current.announcements,
+            contact: acceptRemotePublicState ? (publicState?.contact ?? current.contact) : current.contact,
             activeTrips: Array.isArray(remoteTrips) ? remoteTrips : current.activeTrips,
           };
           localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -378,7 +386,22 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     setStore((current) => {
       const next = updater(current);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      if (syncPublic) void publishPublicState(next);
+
+      if (syncPublic) {
+        const writeVersion = ++publicWriteVersionRef.current;
+        publicWritePendingRef.current = true;
+        void publishPublicState(next)
+          .catch((error) => {
+            console.error('Unable to save shared transit data:', error);
+          })
+          .finally(() => {
+            // Only the newest write may release the polling guard.
+            if (publicWriteVersionRef.current === writeVersion) {
+              publicWritePendingRef.current = false;
+            }
+          });
+      }
+
       if (syncAccounts) void publishAccounts(next.accounts);
       return next;
     });
