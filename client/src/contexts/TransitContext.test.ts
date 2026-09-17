@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getArrivalLocation, getRoutePassingPoints, getRoutesUsingTerminal, isTripLocationStale, replaceDriverActiveTrip, type ActiveTrip, type Terminal, type TransitRoute } from './TransitContext';
+import { getArrivalLocation, getRoutePassingPoints, getRoutesUsingTerminal, replaceDriverActiveTrip, type ActiveTrip, type Terminal, type TransitRoute } from './TransitContext';
 
 const route = (id: string, originTerminalId: string, destinationTerminalId: string): TransitRoute => ({
   id,
@@ -52,17 +52,6 @@ describe('getArrivalLocation', () => {
     const activeTrip: ActiveTrip = { id: 'trip-1', driverId: 'driver-1', routeId: 'dapa-to-general-luna', status: 'departed', latitude: 9.77, longitude: 126.1, lastUpdated: 0 };
 
     expect(getArrivalLocation(activeTrip, routes, terminals)).toEqual({ latitude: 9.7895, longitude: 126.1554 });
-  });
-});
-
-describe('isTripLocationStale', () => {
-  it('flags only departed vehicles whose last update is older than the freshness window', () => {
-    const liveTrip: ActiveTrip = { id: 'trip-live', driverId: 'driver-1', routeId: 'route-1', status: 'departed', latitude: 9.7, longitude: 126, lastUpdated: 100_000 };
-    const arrivedTrip: ActiveTrip = { ...liveTrip, id: 'trip-arrived', status: 'arrived', lastUpdated: 0 };
-
-    expect(isTripLocationStale(liveTrip, 159_999)).toBe(false);
-    expect(isTripLocationStale(liveTrip, 160_001)).toBe(true);
-    expect(isTripLocationStale(arrivedTrip, 160_001)).toBe(false);
   });
 });
 

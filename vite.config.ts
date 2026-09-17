@@ -4,13 +4,13 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
-import { VitePWA } from "vite-plugin-pwa";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 // =============================================================================
 // Manus Debug Collector - Vite Plugin
 // Writes browser logs directly to files, trimmed when exceeding size limit
 // =============================================================================
+
 const PROJECT_ROOT = import.meta.dirname;
 const LOG_DIR = path.join(PROJECT_ROOT, ".manus-logs");
 const MAX_LOG_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per log file
@@ -36,12 +36,9 @@ function trimLogFile(logPath: string, maxSize: number) {
 
     // Keep newest lines (from end) that fit within 60% of maxSize
     const targetSize = TRIM_TARGET_BYTES;
-
     for (let i = lines.length - 1; i >= 0; i--) {
       const lineBytes = Buffer.byteLength(`${lines[i]}\n`, "utf-8");
-
       if (keptBytes + lineBytes > targetSize) break;
-
       keptLines.unshift(lines[i]);
       keptBytes += lineBytes;
     }
@@ -56,7 +53,6 @@ function writeToLogFile(source: LogSource, entries: unknown[]) {
   if (entries.length === 0) return;
 
   ensureLogDir();
-
   const logPath = path.join(LOG_DIR, `${source}.log`);
 
   // Format entries with timestamps
@@ -86,7 +82,6 @@ function vitePluginManusDebugCollector(): Plugin {
       if (process.env.NODE_ENV === "production") {
         return html;
       }
-
       return {
         html,
         tags: [
@@ -114,11 +109,9 @@ function vitePluginManusDebugCollector(): Plugin {
           if (payload.consoleLogs?.length > 0) {
             writeToLogFile("browserConsole", payload.consoleLogs);
           }
-
           if (payload.networkRequests?.length > 0) {
             writeToLogFile("networkRequests", payload.networkRequests);
           }
-
           if (payload.sessionEvents?.length > 0) {
             writeToLogFile("sessionReplay", payload.sessionEvents);
           }
@@ -128,7 +121,6 @@ function vitePluginManusDebugCollector(): Plugin {
         };
 
         const reqBody = (req as { body?: unknown }).body;
-
         if (reqBody && typeof reqBody === "object") {
           try {
             handlePayload(reqBody);
@@ -136,12 +128,10 @@ function vitePluginManusDebugCollector(): Plugin {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: false, error: String(e) }));
           }
-
           return;
         }
 
         let body = "";
-
         req.on("data", (chunk) => {
           body += chunk.toString();
         });
@@ -163,21 +153,16 @@ function vitePluginManusDebugCollector(): Plugin {
 function vitePluginStorageProxy(): Plugin {
   return {
     name: "manus-storage-proxy",
-
     configureServer(server: ViteDevServer) {
       server.middlewares.use("/manus-storage", async (req, res) => {
         const key = req.url?.replace(/^\//, "");
-
         if (!key) {
           res.writeHead(400, { "Content-Type": "text/plain" });
           res.end("Missing storage key");
           return;
         }
 
-        const forgeBaseUrl = (
-          process.env.BUILT_IN_FORGE_API_URL || ""
-        ).replace(/\/+$/, "");
-
+        const forgeBaseUrl = (process.env.BUILT_IN_FORGE_API_URL || "").replace(/\/+$/, "");
         const forgeKey = process.env.BUILT_IN_FORGE_API_KEY;
 
         if (!forgeBaseUrl || !forgeKey) {
@@ -187,17 +172,11 @@ function vitePluginStorageProxy(): Plugin {
         }
 
         try {
-          const forgeUrl = new URL(
-            "v1/storage/presign/get",
-            forgeBaseUrl + "/",
-          );
-
+          const forgeUrl = new URL("v1/storage/presign/get", forgeBaseUrl + "/");
           forgeUrl.searchParams.set("path", key);
 
           const forgeResp = await fetch(forgeUrl, {
-            headers: {
-              Authorization: `Bearer ${forgeKey}`,
-            },
+            headers: { Authorization: `Bearer ${forgeKey}` },
           });
 
           if (!forgeResp.ok) {
@@ -206,21 +185,14 @@ function vitePluginStorageProxy(): Plugin {
             return;
           }
 
-          const { url } = (await forgeResp.json()) as {
-            url: string;
-          };
-
+          const { url } = (await forgeResp.json()) as { url: string };
           if (!url) {
             res.writeHead(502, { "Content-Type": "text/plain" });
             res.end("Empty signed URL");
             return;
           }
 
-          res.writeHead(307, {
-            Location: url,
-            "Cache-Control": "no-store",
-          });
-
+          res.writeHead(307, { Location: url, "Cache-Control": "no-store" });
           res.end();
         } catch {
           res.writeHead(502, { "Content-Type": "text/plain" });
@@ -231,133 +203,27 @@ function vitePluginStorageProxy(): Plugin {
   };
 }
 
-const plugins = [
-  react(),
-  tailwindcss(),
-  jsxLocPlugin(),
-  vitePluginManusRuntime(),
-  vitePluginManusDebugCollector(),
-  vitePluginStorageProxy(),
-
-  // ===========================================================================
-  // DatscoGo PWA
-  // Enables browser installation / Add to Home Screen
-  // ===========================================================================
-  VitePWA({
-    registerType: "autoUpdate",
-    injectRegister: "auto",
-
-    includeAssets: [
-      "pwa-192x192.png",
-      "pwa-512x512.png",
-    ],
-
-    manifest: {
-      name: "DatscoGo",
-      short_name: "DatscoGo",
-
-      description:
-        "Siargao public transportation route, schedule, terminal, and travel guide.",
-
-      start_url: "/",
-      scope: "/",
-      display: "standalone",
-      orientation: "portrait-primary",
-
-      background_color: "#ffffff",
-      theme_color: "#2563eb",
-
-      categories: [
-        "navigation",
-        "travel",
-        "transportation",
-      ],
-
-      icons: [
-        {
-          src: "/pwa-192x192.png",
-          sizes: "192x192",
-          type: "image/png",
-          purpose: "any",
-        },
-        {
-          src: "/pwa-512x512.png",
-          sizes: "512x512",
-          type: "image/png",
-          purpose: "any",
-        },
-        {
-          src: "/pwa-512x512.png",
-          sizes: "512x512",
-          type: "image/png",
-          purpose: "maskable",
-        },
-      ],
-    },
-
-    workbox: {
-      navigateFallback: "/index.html",
-
-      cleanupOutdatedCaches: true,
-
-      runtimeCaching: [
-        {
-          urlPattern: /^https:\/\/.*\.tile\.openstreetmap\.org\/.*/i,
-          handler: "CacheFirst",
-          options: {
-            cacheName: "datscogo-map-tiles",
-            expiration: {
-              maxEntries: 250,
-              maxAgeSeconds: 60 * 60 * 24 * 7,
-            },
-            cacheableResponse: {
-              statuses: [0, 200],
-            },
-          },
-        },
-      ],
-    },
-
-    devOptions: {
-      enabled: false,
-    },
-  }),
-];
+const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector(), vitePluginStorageProxy()];
 
 export default defineConfig({
   plugins,
-
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
       "@shared": path.resolve(import.meta.dirname, "shared"),
-      "@assets": path.resolve(
-        import.meta.dirname,
-        "attached_assets",
-      ),
+      "@assets": path.resolve(import.meta.dirname, "attached_assets"),
     },
   },
-
   envDir: path.resolve(import.meta.dirname),
-
   root: path.resolve(import.meta.dirname, "client"),
-
   build: {
-    outDir: path.resolve(
-      import.meta.dirname,
-      "dist/public",
-    ),
+    outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },
-
   server: {
     port: 3000,
-
-    // Will find next available port if 3000 is busy
-    strictPort: false,
-
+    strictPort: false, // Will find next available port if 3000 is busy
     host: true,
-
     allowedHosts: [
       ".manuspre.computer",
       ".manus.computer",
@@ -367,7 +233,6 @@ export default defineConfig({
       "localhost",
       "127.0.0.1",
     ],
-
     fs: {
       strict: true,
       deny: ["**/.*"],

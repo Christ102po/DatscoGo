@@ -14,7 +14,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({ onBack }) => {
   const afternoonSlots = visibleSchedules.filter((slot) => slot.period === 'Afternoon');
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50">
+    <div className="flex-1 bg-slate-50 flex flex-col h-full relative overflow-y-auto">
       {/* Top Header bar */}
       <div className="w-full bg-[#1D4ED8] pt-3 pb-3 px-4 flex items-center justify-between text-white relative z-20 shadow-sm">
         <button
@@ -32,13 +32,15 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({ onBack }) => {
           DatscoGo Schedule
         </div>
 
-        <div className="h-8 w-8" aria-hidden="true" />
+        <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold text-white overflow-hidden border border-white/30">
+          <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=60" alt="Profile" className="w-full h-full object-cover" />
+        </div>
       </div>
 
       {/* Schedule Content */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-3.5 pb-24 sm:p-5 sm:pb-24 md:p-8 md:pb-24">
+      <div className="flex-1 p-3.5 overflow-y-auto pb-6">
         {/* Route Tabs Selector */}
-        <div className="mx-auto mb-4 flex w-full max-w-6xl items-center gap-1 overflow-x-auto rounded-2xl bg-slate-200/80 p-1">
+        <div className="bg-slate-200/80 p-1 rounded-2xl flex items-center gap-1 mb-3 overflow-x-auto">
           {routes.map((route) => (
             <button key={route.id} onClick={() => setActiveRouteId(route.id)} className={`flex-1 whitespace-nowrap py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeRouteId === route.id ? 'bg-[#1D4ED8] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
               {route.title}
@@ -47,7 +49,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({ onBack }) => {
         </div>
 
         {/* Schedule Card */}
-        <div className="mx-auto w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
           <div className="font-bold text-slate-900 text-sm mb-0.5">
             {activeRoute?.title ?? 'No route selected'}
           </div>

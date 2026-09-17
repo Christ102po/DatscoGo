@@ -11,7 +11,7 @@ export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, 
   const { routes } = useTransit();
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50">
+    <div className="flex-1 bg-slate-50 flex flex-col h-full relative overflow-y-auto">
       {/* Top Header bar */}
       <div className="w-full bg-[#1D4ED8] pt-3 pb-3 px-4 flex items-center justify-between text-white relative z-20 shadow-sm">
         <button
@@ -29,11 +29,13 @@ export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, 
           DatscoGo Routes
         </div>
 
-        <div className="h-8 w-8" aria-hidden="true" />
+        <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold text-white overflow-hidden border border-white/30">
+          <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=60" alt="Profile" className="w-full h-full object-cover" />
+        </div>
       </div>
 
       {/* Routes List Content */}
-      <div className="mx-auto grid min-h-0 w-full max-w-7xl flex-1 gap-4 overflow-y-auto p-3.5 pb-24 sm:grid-cols-2 sm:p-5 sm:pb-24 lg:grid-cols-3 lg:p-8 lg:pb-24">
+      <div className="flex-1 p-3.5 overflow-y-auto pb-6 sm:grid sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
         {routes.map((route) => (
           <div key={route.id} className={!route.available ? 'opacity-60 grayscale-[0.25]' : ''}>
             <RouteCard
@@ -41,11 +43,9 @@ export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, 
               title={route.title}
               eta={route.available ? route.eta : 'Unavailable'}
               fare={`₱${route.fare}`}
-              studentFare={route.studentFare === null || route.studentFare === undefined ? null : `₱${route.studentFare}`}
-              seniorCitizenFare={route.seniorCitizenFare === null || route.seniorCitizenFare === undefined ? null : `₱${route.seniorCitizenFare}`}
+              discountedFare={route.discountedFare === null ? null : `₱${route.discountedFare}`}
               durationBadge={route.duration}
               passingPoints={getRoutePassingPoints(route)}
-              stopFares={(route.waypoints ?? []).filter((point) => point.label.trim()).map((point) => ({ label: point.label.trim(), regularFare: point.regularFare ?? null, studentFare: point.studentFare ?? null, seniorCitizenFare: point.seniorCitizenFare ?? null }))}
               onViewSchedule={() => onViewSchedule(route.title)}
             />
             {!route.available && <p className="-mt-3 mb-3 px-3 text-[10px] font-bold uppercase tracking-wide text-red-600">Service currently unavailable</p>}
