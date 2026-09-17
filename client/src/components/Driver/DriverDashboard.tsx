@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BellRing, CheckCircle2, CircleDotDashed, Clock3, LogOut, MapPin, Navigation, RadioTower, RefreshCw, Route, ShieldCheck } from 'lucide-react';
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { useTransit } from '../../contexts/TransitContext';
+import { DriverLocationMap } from './DriverLocationMap';
+import { LocationPermissionPrompt } from '../Common/LocationPermissionPrompt';
 
 interface DriverDashboardProps {
   onLogout: () => void;
@@ -12,62 +14,132 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
   const [selectedRouteId, setSelectedRouteId] = useState(routes[0]?.id ?? '');
   const [locationMessage, setLocationMessage] = useState('Location sharing is off.');
   const [isLocating, setIsLocating] = useState(false);
+  const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [showLocationPermission, setShowLocationPermission] = useState(false);
+  const [locationConsent, setLocationConsent] = useState(false);
+  const [pendingLocationAction, setPendingLocationAction] = useState<'initial' | 'departure' | 'update'>('initial');
 
   const availableRoutes = routes.filter((route) => route.available);
   const selectedRoute = routes.find((route) => route.id === selectedRouteId) ?? availableRoutes[0];
   const ownTrip = activeTrips.find((trip) => trip.driverId === currentUser?.id) ?? null;
   const tripRoute = useMemo(() => routes.find((route) => route.id === ownTrip?.routeId), [ownTrip?.routeId, routes]);
 
-  const useDeviceLocation = (callback: (location?: { latitude: number; longitude: number }) => void) => {
+  const useDeviceLocation = (callback: (location: { latitude: number; longitude: number }) => void) => {
     if (!navigator.geolocation) {
-      setLocationMessage('This device does not support location services. The terminal location is being used instead.');
-      callback();
+      setLocationMessage('This device does not support location services, so live GPS sharing cannot start.');
       return;
     }
 
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        callback({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        setDeviceLocation(location);
+        setLocationConsent(true);
+        setShowLocationPermission(false);
+        callback(location);
         setLocationMessage(`Location shared at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
         setIsLocating(false);
       },
-      () => {
-        callback();
-        setLocationMessage('Location permission was unavailable. The selected terminal position is being used.');
+      (error) => {
+        setShowLocationPermission(false);
+        setLocationConsent(false);
+        setLocationMessage(error.code === error.PERMISSION_DENIED
+          ? 'Location permission was denied. Enable it in your browser/site settings before starting live GPS sharing.'
+          : 'Your GPS location is unavailable right now. Check phone location services and try again.');
         setIsLocating(false);
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
     );
+  };
+
+  const requestDriverPermission = () => {
+    setShowLocationPermission(false);
+    useDeviceLocation((location) => {
+      if (!currentUser) return;
+      if (pendingLocationAction === 'departure' && selectedRoute) {
+        startTrip(currentUser.id, selectedRoute.id, location);
+      } else if (pendingLocationAction === 'update' && ownTrip) {
+        updateTripLocation(currentUser.id, location);
+      }
+      setPendingLocationAction('initial');
+    });
   };
 
   const handleDeparture = () => {
     if (!currentUser || !selectedRoute) return;
+    if (!locationConsent) {
+      setPendingLocationAction('departure');
+      setShowLocationPermission(true);
+      setLocationMessage('Allow location access before starting a departure so passengers can receive the Datsco GPS position.');
+      return;
+    }
     useDeviceLocation((location) => startTrip(currentUser.id, selectedRoute.id, location));
   };
 
   const handleLocationUpdate = () => {
     if (!ownTrip || !currentUser) return;
-    useDeviceLocation((location) => {
-      if (location) updateTripLocation(currentUser.id, location);
-    });
+    if (!locationConsent) {
+      setPendingLocationAction('update');
+      setShowLocationPermission(true);
+      return;
+    }
+    useDeviceLocation((location) => updateTripLocation(currentUser.id, location));
   };
 
   useEffect(() => {
-    if (!currentUser || ownTrip?.status !== 'departed' || !navigator.geolocation) return;
+    let cancelled = false;
+
+    const prepareDriverPermission = async () => {
+      if (!navigator.geolocation) {
+        setLocationMessage('This device does not support location services.');
+        return;
+      }
+
+      try {
+        if (navigator.permissions?.query) {
+          const permission = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+          if (cancelled) return;
+          if (permission.state === 'granted') {
+            setLocationConsent(true);
+            useDeviceLocation(() => undefined);
+            return;
+          }
+          if (permission.state === 'denied') {
+            setLocationMessage('Location is blocked in your browser/site settings. Enable it before starting a departure.');
+          }
+        }
+      } catch {
+        // Permission API is not available on every mobile browser.
+      }
+
+      if (!cancelled) {
+        setPendingLocationAction('initial');
+        setShowLocationPermission(true);
+      }
+    };
+
+    prepareDriverPermission();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser || ownTrip?.status !== 'departed' || !navigator.geolocation || !locationConsent) return;
 
     setLocationMessage('Live location refresh is active while this driver dashboard is open.');
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        updateTripLocation(currentUser.id, { latitude: position.coords.latitude, longitude: position.coords.longitude });
+        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        setDeviceLocation(location);
+        updateTripLocation(currentUser.id, location);
         setLocationMessage(`Live location refreshed at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
       },
       () => setLocationMessage('Live refresh needs location permission. Use Update location to retry.'),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [currentUser?.id, ownTrip?.status, updateTripLocation]);
+  }, [currentUser?.id, ownTrip?.status, updateTripLocation, locationConsent]);
 
   return (
     <main className="min-h-[100dvh] bg-slate-50 text-slate-900">
@@ -126,6 +198,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
               {ownTrip?.status === 'departed' && <button type="button" onClick={() => currentUser && arriveTrip(currentUser.id)} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"><CheckCircle2 size={18} /> Mark as arrived</button>}
             </div>
             <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-500"><MapPin size={15} className="mt-0.5 shrink-0 text-blue-600" /> {locationMessage} Passengers see the latest saved vehicle position in their DatscoGo view.</p>
+            <div className="mt-4"><DriverLocationMap location={deviceLocation ?? (ownTrip ? { latitude: ownTrip.latitude, longitude: ownTrip.longitude } : null)} route={tripRoute ?? selectedRoute} /></div>
           </section>
         </section>
 
@@ -149,6 +222,18 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
           </section>
         </aside>
       </div>
+
+      <LocationPermissionPrompt
+        open={showLocationPermission}
+        mode="driver"
+        isRequesting={isLocating}
+        onAllow={requestDriverPermission}
+        onNotNow={() => {
+          setShowLocationPermission(false);
+          setPendingLocationAction('initial');
+          setLocationMessage('Location access was skipped. Allow GPS before starting a departure to share the live Datsco position.');
+        }}
+      />
     </main>
   );
 };
