@@ -5,9 +5,10 @@ import { getRoutePassingPoints, useTransit } from '../../contexts/TransitContext
 export interface DatscoRoutesScreenProps {
   onBack: () => void;
   onViewSchedule: (routeName: string) => void;
+  onSeeRoute: (routeId: string) => void;
 }
 
-export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, onViewSchedule }) => {
+export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, onViewSchedule, onSeeRoute }) => {
   const { routes } = useTransit();
 
   return (
@@ -47,6 +48,7 @@ export const DatscoRoutesScreen: React.FC<DatscoRoutesScreenProps> = ({ onBack, 
               passingPoints={getRoutePassingPoints(route)}
               stopFares={(route.waypoints ?? []).filter((point) => point.label.trim()).map((point) => ({ label: point.label.trim(), regularFare: point.regularFare ?? null, studentFare: point.studentFare ?? null, seniorCitizenFare: point.seniorCitizenFare ?? null }))}
               onViewSchedule={() => onViewSchedule(route.title)}
+              onSeeRoute={route.available ? () => onSeeRoute(route.id) : undefined}
             />
             {!route.available && <p className="-mt-3 mb-3 px-3 text-[10px] font-bold uppercase tracking-wide text-red-600">Service currently unavailable</p>}
           </div>

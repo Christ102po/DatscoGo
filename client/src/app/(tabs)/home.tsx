@@ -27,6 +27,7 @@ export default function HomeTabScreen() {
   const [focusedTerminalId, setFocusedTerminalId] = useState<string | null>(null);
   const [focusedSearchDestination, setFocusedSearchDestination] = useState<SearchDestination | null>(null);
   const [guidedTerminalId, setGuidedTerminalId] = useState<string | null>(null);
+  const [previewRouteId, setPreviewRouteId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -242,6 +243,7 @@ export default function HomeTabScreen() {
 
   const handleTerminalViewMap = (terminalId: string) => {
     setGuidedTerminalId(null);
+    setPreviewRouteId(null);
     setFocusedTerminalId(terminalId);
     setFocusedSearchDestination(null);
     setCurrentScreen('home');
@@ -250,6 +252,7 @@ export default function HomeTabScreen() {
 
   const handleDestinationSelect = (destination: SearchDestination) => {
     setGuidedTerminalId(null);
+    setPreviewRouteId(null);
     setSearchQuery(destination.label);
     setFocusedTerminalId(destination.terminalId ?? null);
     setFocusedSearchDestination(destination.terminalId ? null : destination);
@@ -262,6 +265,7 @@ export default function HomeTabScreen() {
     setFocusedTerminalId(null);
     setFocusedSearchDestination(null);
     setGuidedTerminalId(null);
+    setPreviewRouteId(null);
   };
 
   const handleGuideToTerminal = (terminalId: string) => {
@@ -269,6 +273,7 @@ export default function HomeTabScreen() {
     if (!terminal) return;
 
     // Keep guidance inside DatscoGo instead of opening Google Maps or another app.
+    setPreviewRouteId(null);
     setGuidedTerminalId(terminalId);
     setFocusedTerminalId(terminalId);
     setFocusedSearchDestination(null);
@@ -282,6 +287,16 @@ export default function HomeTabScreen() {
     } else {
       setLocationStatus(`Guiding you to ${terminal.name} using DatscoGo's map.`);
     }
+  };
+
+  const handleSeeRoute = (routeId: string) => {
+    setPreviewRouteId(routeId);
+    setGuidedTerminalId(null);
+    setFocusedTerminalId(null);
+    setFocusedSearchDestination(null);
+    setSearchQuery('');
+    setCurrentScreen('home');
+    setActiveTab(null);
   };
 
   const stopTerminalGuidance = () => {
@@ -328,7 +343,7 @@ export default function HomeTabScreen() {
 
         <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
           {currentScreen === 'datsco-routes' && (
-            <DatscoRoutesScreen onBack={handleBackToHome} onViewSchedule={setScheduleModalRoute} />
+            <DatscoRoutesScreen onBack={handleBackToHome} onViewSchedule={setScheduleModalRoute} onSeeRoute={handleSeeRoute} />
           )}
 
           {currentScreen === 'schedule' && <ScheduleScreen onBack={handleBackToHome} />}
@@ -359,6 +374,7 @@ export default function HomeTabScreen() {
                     focusedTerminalId={focusedTerminalId}
                     focusedSearchDestination={focusedSearchDestination}
                     guidedTerminalId={guidedTerminalId}
+                    previewRouteId={previewRouteId}
                     userLocation={userLocation}
                     locationStatus={locationStatus}
                     onRequestLocation={handlePassengerLocationAction}

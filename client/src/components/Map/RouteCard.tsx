@@ -21,6 +21,7 @@ export interface RouteCardProps {
   passingPoints: string[];
   stopFares: RouteStopFare[];
   onViewSchedule: () => void;
+  onSeeRoute?: () => void;
 }
 
 const money = (value: number | null) => value === null ? '—' : `₱${value}`;
@@ -36,6 +37,7 @@ export const RouteCard: React.FC<RouteCardProps> = ({
   passingPoints,
   stopFares,
   onViewSchedule,
+  onSeeRoute,
 }) => {
   return (
     <div className="mb-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -75,6 +77,7 @@ export const RouteCard: React.FC<RouteCardProps> = ({
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button onClick={onViewSchedule} className="inline-flex items-center space-x-1.5 rounded-lg border border-[#1D4ED8] px-3 py-1.5 text-xs font-semibold text-[#1D4ED8] transition-colors hover:bg-blue-50"><span>View schedule</span><ArrowRightIcon size={14} color="#1D4ED8" /></button>
+          {onSeeRoute && <button onClick={onSeeRoute} className="inline-flex items-center space-x-1.5 rounded-lg bg-[#1D4ED8] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-700"><span>See route</span><ArrowRightIcon size={14} color="#ffffff" /></button>}
         </div>
       </div>
     </div>

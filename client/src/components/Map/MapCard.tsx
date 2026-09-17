@@ -134,14 +134,25 @@ const UserLocationViewport: React.FC<{
   userLocation: { latitude: number; longitude: number };
 }> = ({ userLocation }) => {
   const map = useMap();
+  const previousLocation = useRef({ latitude: userLocation.latitude, longitude: userLocation.longitude });
 
   useEffect(() => {
-    map.flyTo([userLocation.latitude, userLocation.longitude], Math.max(map.getZoom(), 15), {
-      animate: true,
-      duration: 0.7,
-    });
+    const previous = previousLocation.current;
+    const changed = previous.latitude !== userLocation.latitude || previous.longitude !== userLocation.longitude;
+    previousLocation.current = { latitude: userLocation.latitude, longitude: userLocation.longitude };
+    if (!changed) return;
+    map.flyTo([userLocation.latitude, userLocation.longitude], Math.max(map.getZoom(), 15), { animate: true, duration: 0.7 });
   }, [map, userLocation.latitude, userLocation.longitude]);
 
+  return null;
+};
+
+const RoutePreviewViewport: React.FC<{ points: [number, number][] }> = ({ points }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length < 2) return;
+    map.fitBounds(L.latLngBounds(points), { padding: [42, 42], maxZoom: 15, animate: true });
+  }, [map, points]);
   return null;
 };
 
@@ -184,6 +195,7 @@ export const MapCard: React.FC<{
   focusedTerminalId?: string | null;
   focusedSearchDestination?: MapSearchDestination | null;
   guidedTerminalId?: string | null;
+  previewRouteId?: string | null;
   userLocation?: { latitude: number; longitude: number } | null;
   locationStatus?: string;
   onRequestLocation?: () => void;
@@ -192,6 +204,7 @@ export const MapCard: React.FC<{
   focusedTerminalId = null,
   focusedSearchDestination = null,
   guidedTerminalId = null,
+  previewRouteId = null,
   userLocation = null,
   locationStatus = '',
   onRequestLocation,
@@ -205,6 +218,7 @@ export const MapCard: React.FC<{
   const { terminals, routes, accounts, activeTrips } = useTransit();
   const guidedTerminal = terminals.find((terminal) => terminal.id === guidedTerminalId) ?? null;
   const [guidanceRoute, setGuidanceRoute] = useState<GuidanceRouteState>({ points: [], distanceMeters: null, durationSeconds: null, status: 'idle' });
+  const [previewRoadPoints, setPreviewRoadPoints] = useState<[number, number][]>([]);
 
   useEffect(() => {
     setIsMounted(true);
@@ -215,7 +229,8 @@ export const MapCard: React.FC<{
   const liveTripCount = activeTrips.filter((trip) => trip.status === 'departed').length;
   const visibleTrips = showLiveOnly ? activeTrips.filter((trip) => trip.status === 'departed') : activeTrips;
   const selectedTrip = activeTrips.find((trip) => trip.id === selectedTripId) ?? null;
-  const displayedRoute = selectedTrip?.status === 'departed' ? routes.find((route) => route.id === selectedTrip.routeId) : undefined;
+  const previewRoute = previewRouteId ? routes.find((route) => route.id === previewRouteId) : undefined;
+  const displayedRoute = previewRoute ?? (selectedTrip?.status === 'departed' ? routes.find((route) => route.id === selectedTrip.routeId) : undefined);
   const selectedDriver = selectedTrip ? accounts.find((account) => account.id === selectedTrip.driverId) : null;
   const selectedDestination = displayedRoute?.destination ?? 'destination terminal';
   const staleLiveTrips = activeTrips.filter((trip) => isTripLocationStale(trip, now));
@@ -267,6 +282,18 @@ export const MapCard: React.FC<{
   }, [guidedTerminal?.id, guidedTerminal?.latitude, guidedTerminal?.longitude, userLocation?.latitude, userLocation?.longitude]);
 
   useEffect(() => {
+    if (!previewRoute || previewRoute.coordinates.length < 2) {
+      setPreviewRoadPoints([]);
+      return;
+    }
+    const controller = new AbortController();
+    fetchRoadRoute(previewRoute.coordinates, { signal: controller.signal, alternatives: false, prefer: 'fastest' })
+      .then((result) => setPreviewRoadPoints(result.points))
+      .catch(() => { if (!controller.signal.aborted) setPreviewRoadPoints(previewRoute.coordinates); });
+    return () => controller.abort();
+  }, [previewRoute?.id]);
+
+  useEffect(() => {
     if (selectedTrip && selectedTrip.status !== 'departed') setSelectedTripId(null);
   }, [selectedTrip]);
 
@@ -282,9 +309,7 @@ export const MapCard: React.FC<{
           style={{ zIndex: 10 }}
         >
           <MapSizeInvalidator />
-          {userLocation && !focusedTerminalId && !focusedSearchDestination && !guidedTerminal && (
-            <UserLocationViewport userLocation={userLocation} />
-          )}
+          {userLocation && <UserLocationViewport userLocation={userLocation} />}
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={18}
@@ -299,7 +324,13 @@ export const MapCard: React.FC<{
               )}
             </>
           )}
-          {displayedRoute && !guidedTerminal && <Polyline positions={displayedRoute.coordinates} pathOptions={{ color: '#1D4ED8', weight: 5, opacity: 0.85 }} />}
+          {previewRoute && !guidedTerminal && previewRoadPoints.length >= 2 && (
+            <>
+              <RoutePreviewViewport points={previewRoadPoints} />
+              <Polyline positions={previewRoadPoints} pathOptions={{ color: '#1D4ED8', weight: 5, opacity: 0.88 }} />
+            </>
+          )}
+          {!previewRoute && displayedRoute && !guidedTerminal && <Polyline positions={displayedRoute.coordinates} pathOptions={{ color: '#1D4ED8', weight: 5, opacity: 0.85 }} />}
           {userLocation && <Marker position={[userLocation.latitude, userLocation.longitude]} icon={userIcon}><Popup><div className="min-w-32"><div className="text-xs font-bold text-blue-700">Your location</div><div className="mt-1 text-[10px] text-slate-500">Based on this device's GPS.</div><div className="mt-2 text-[10px] font-semibold text-blue-600">{userLocation.latitude.toFixed(5)}, {userLocation.longitude.toFixed(5)}</div></div></Popup></Marker>}
           {terminals.map((terminal) => <TerminalMarker key={terminal.id} terminal={terminal} focused={terminal.id === focusedTerminalId} />)}
           {focusedSearchDestination && <SearchDestinationMarker destination={focusedSearchDestination} />}

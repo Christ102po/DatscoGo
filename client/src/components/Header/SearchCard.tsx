@@ -87,13 +87,12 @@ export const SearchCard: React.FC<SearchCardProps> = ({
               <X size={18} />
             </button>
           ) : (
-            <button
-              type="submit"
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1D4ED8] text-white shadow-md transition hover:bg-blue-700 active:scale-95"
-              aria-label="Search destination"
+            <div
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#1D4ED8] text-white shadow-md"
+              aria-hidden="true"
             >
               <MapPin size={18} />
-            </button>
+            </div>
           )}
         </div>
 
