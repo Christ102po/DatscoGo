@@ -436,14 +436,30 @@ export default function HomeTabScreen() {
           <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs animate-in fade-in duration-200">
             <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
               <div className="mb-3 flex items-center justify-between"><h3 className="text-base font-bold text-slate-900">DatscoGo Help</h3><button onClick={() => setShowHelpModal(false)} className="font-bold text-slate-400 hover:text-slate-600">✕</button></div>
-              <p className="mb-4 text-xs leading-relaxed text-slate-600">Need assistance with routes, schedules, or terminal locations? {contact.phone ? `Call ${contact.phone}.` : 'Open Contact Us from the menu for available support details.'}</p>
-              <button onClick={() => setShowHelpModal(false)} className="w-full rounded-xl bg-[#1D4ED8] py-2.5 text-xs font-bold text-white hover:bg-blue-700">Got it</button>
+              <p className="mb-4 text-xs leading-relaxed text-slate-600">Need assistance with routes, schedules, or terminal locations? {contact.phone ? `Call ${contact.phone}.` : 'Open Contact Us for available support details.'}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowHelpModal(false);
+                    setInformationView('contact');
+                  }}
+                  className="w-full rounded-xl border border-blue-200 bg-blue-50 py-2.5 text-xs font-bold text-[#1D4ED8] transition hover:bg-blue-100"
+                >
+                  Contact Us
+                </button>
+                <button onClick={() => setShowHelpModal(false)} className="w-full rounded-xl bg-[#1D4ED8] py-2.5 text-xs font-bold text-white hover:bg-blue-700">Got it</button>
+              </div>
             </div>
           </div>
         )}
 
         <DatscoGoSidebar isOpen={showMenuDrawer} onClose={() => setShowMenuDrawer(false)} onSelect={handleSidebarAction} />
-        <InformationPanel view={informationView} onClose={() => setInformationView(null)} />
+        <InformationPanel
+          view={informationView}
+          onClose={() => setInformationView(null)}
+          onOpenContact={() => setInformationView('contact')}
+        />
         {showLogin && <LoginPanel onClose={() => setShowLogin(false)} onLogin={handleLogin} />}
 
         <LocationPermissionPrompt

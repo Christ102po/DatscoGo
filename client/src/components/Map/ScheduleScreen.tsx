@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ChevronsLeftRight } from 'lucide-react';
 import { useTransit } from '../../contexts/TransitContext';
 
 export interface ScheduleScreenProps {
@@ -38,12 +39,34 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({ onBack }) => {
       {/* Schedule Content */}
       <div className="min-h-0 flex-1 overflow-y-auto p-3.5 pb-24 sm:p-5 sm:pb-24 md:p-8 md:pb-24">
         {/* Route Tabs Selector */}
-        <div className="mx-auto mb-4 flex w-full max-w-6xl items-center gap-1 overflow-x-auto rounded-2xl bg-slate-200/80 p-1">
-          {routes.map((route) => (
-            <button key={route.id} onClick={() => setActiveRouteId(route.id)} className={`flex-1 whitespace-nowrap py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeRouteId === route.id ? 'bg-[#1D4ED8] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>
-              {route.title}
-            </button>
-          ))}
+        <div className="mx-auto mb-4 w-full max-w-6xl">
+          <div className="relative">
+            <div
+              className="flex w-full snap-x snap-mandatory items-center gap-1 overflow-x-auto rounded-2xl bg-slate-200/80 p-1 scroll-smooth touch-pan-x [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              aria-label="Scrollable route schedule tabs"
+            >
+              {routes.map((route) => (
+                <button
+                  key={route.id}
+                  onClick={() => setActiveRouteId(route.id)}
+                  className={`shrink-0 snap-start whitespace-nowrap sm:flex-1 sm:shrink rounded-xl px-3 py-2 text-xs font-bold transition-all cursor-pointer ${activeRouteId === route.id ? 'bg-[#1D4ED8] text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  {route.title}
+                </button>
+              ))}
+            </div>
+
+            {routes.length > 1 && (
+              <div className="pointer-events-none absolute inset-y-1 right-1 w-8 rounded-r-xl bg-gradient-to-l from-slate-200/95 to-transparent sm:hidden" aria-hidden="true" />
+            )}
+          </div>
+
+          {routes.length > 1 && (
+            <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[10px] font-semibold text-slate-500 sm:hidden">
+              <ChevronsLeftRight size={14} className="animate-pulse text-[#1D4ED8]" aria-hidden="true" />
+              <span>Swipe left or right to view other route schedules</span>
+            </div>
+          )}
         </div>
 
         {/* Schedule Card */}

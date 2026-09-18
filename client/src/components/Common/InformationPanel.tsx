@@ -7,6 +7,7 @@ export type InformationPanelView = 'about' | 'contact' | 'help' | null;
 interface InformationPanelProps {
   view: InformationPanelView;
   onClose: () => void;
+  onOpenContact?: () => void;
 }
 
 const faqs = [
@@ -24,7 +25,7 @@ const faqs = [
   },
 ];
 
-export const InformationPanel: React.FC<InformationPanelProps> = ({ view, onClose }) => {
+export const InformationPanel: React.FC<InformationPanelProps> = ({ view, onClose, onOpenContact }) => {
   const { contact } = useTransit();
   if (!view) return null;
 
@@ -110,6 +111,17 @@ export const InformationPanel: React.FC<InformationPanelProps> = ({ view, onClos
                 <p className="pt-3 text-xs leading-5 text-slate-600">{answer}</p>
               </details>
             ))}
+
+            {onOpenContact && (
+              <button
+                type="button"
+                onClick={onOpenContact}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-[#1D4ED8] px-4 py-3 text-sm font-bold text-white transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"
+              >
+                <Phone size={17} />
+                Contact Us
+              </button>
+            )}
           </div>
         )}
       </section>
