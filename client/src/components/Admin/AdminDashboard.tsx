@@ -5,12 +5,14 @@ import {
   CalendarClock,
   Check,
   CircleAlert,
+  ClipboardList,
   KeyRound,
   LogOut,
   MapPinned,
   Megaphone,
   Pencil,
   Plus,
+  Printer,
   Route,
   ShieldCheck,
   Trash2,
@@ -20,10 +22,10 @@ import {
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { RouteMapPicker } from './RouteMapPicker';
 import { TerminalLocationPicker } from './TerminalLocationPicker';
-import { RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
+import { Account, ActiveTrip, RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
 import { fetchRoadRoute } from '../../lib/routing';
 
-type Section = 'overview' | 'routes' | 'schedules' | 'terminals' | 'announcements' | 'drivers' | 'security';
+type Section = 'overview' | 'routes' | 'schedules' | 'terminals' | 'announcements' | 'drivers' | 'trip-records' | 'security';
 type Notice = { error?: boolean; text: string } | null;
 type RouteDraft = Omit<TransitRoute, 'id' | 'coordinates' | 'waypoints' | 'discountedFare'>;
 
@@ -368,6 +370,127 @@ function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?:
   );
 }
 
+
+function TripRecordsPanel({
+  accounts,
+  routes,
+  onNotice,
+}: {
+  accounts: Account[];
+  routes: TransitRoute[];
+  onNotice: (message: string, error?: boolean) => void;
+}) {
+  const [records, setRecords] = useState<ActiveTrip[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadRecords = async () => {
+    try {
+      const response = await fetch('/api/trip-records', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Unable to load driver trip records.');
+      const data = await response.json() as ActiveTrip[];
+      setRecords(Array.isArray(data) ? data : []);
+    } catch {
+      onNotice('Unable to load driver trip records.', true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadRecords();
+    const timer = window.setInterval(() => void loadRecords(), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const driverName = (driverId: string, snapshotName?: string) => snapshotName || accounts.find((account) => account.id === driverId)?.displayName || 'Deleted/Unknown driver';
+  const routeName = (routeId: string, snapshotName?: string) => snapshotName || routes.find((route) => route.id === routeId)?.title || 'Deleted/Unknown route';
+  const formatDateTime = (value?: number) => value ? new Date(value).toLocaleString() : '—';
+  const tripDuration = (trip: ActiveTrip) => {
+    if (!trip.startedAt || !trip.arrivedAt) return trip.status === 'departed' ? 'In progress' : '—';
+    const totalMinutes = Math.max(0, Math.round((trip.arrivedAt - trip.startedAt) / 60000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  };
+  const escapeHtml = (value: unknown) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+
+  const openPrint = (items: ActiveTrip[], title: string) => {
+    const printable = window.open('', '_blank', 'width=1000,height=800');
+    if (!printable) return onNotice('Please allow pop-ups so the trip record can be printed.', true);
+    const rows = items.map((trip, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(driverName(trip.driverId, trip.driverName))}</td>
+        <td>${escapeHtml(routeName(trip.routeId, trip.routeName))}</td>
+        <td>${escapeHtml(trip.status === 'arrived' ? 'Arrived' : 'Departed')}</td>
+        <td>${escapeHtml(formatDateTime(trip.startedAt))}</td>
+        <td>${escapeHtml(formatDateTime(trip.arrivedAt))}</td>
+        <td>${escapeHtml(tripDuration(trip))}</td>
+      </tr>`).join('');
+    printable.document.write(`<!doctype html><html><head><title>${escapeHtml(title)}</title><style>
+      @page{size:auto;margin:14mm}body{font-family:Arial,sans-serif;color:#0f172a;margin:0}h1{font-size:20px;margin:0 0 4px}.meta{font-size:12px;color:#64748b;margin-bottom:18px}table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid #cbd5e1;padding:7px;text-align:left;vertical-align:top}th{background:#f1f5f9;font-weight:700}.footer{margin-top:14px;font-size:10px;color:#64748b}@media print{button{display:none}}</style></head><body>
+      <h1>${escapeHtml(title)}</h1><div class="meta">Generated ${escapeHtml(new Date().toLocaleString())}</div>
+      <table><thead><tr><th>#</th><th>Driver</th><th>Route</th><th>Status</th><th>Departure</th><th>Arrival</th><th>Duration</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="footer">DatscoGo Driver Trip Records</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+    printable.document.close();
+  };
+
+  const deleteRecord = async (trip: ActiveTrip) => {
+    if (!window.confirm(`Delete this trip record for ${driverName(trip.driverId, trip.driverName)}? This cannot be undone.`)) return;
+    try {
+      const response = await fetch(`/api/trip-records/${encodeURIComponent(trip.id)}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error();
+      setRecords((current) => current.filter((item) => item.id !== trip.id));
+      onNotice('Trip record deleted.');
+    } catch {
+      onNotice('Unable to delete the trip record.', true);
+    }
+  };
+
+  const deleteAll = async () => {
+    if (!records.length || !window.confirm(`Delete all ${records.length} driver trip records? This cannot be undone.`)) return;
+    try {
+      const response = await fetch('/api/trip-records', { method: 'DELETE' });
+      if (!response.ok) throw new Error();
+      setRecords([]);
+      onNotice('All trip records deleted.');
+    } catch {
+      onNotice('Unable to delete all trip records.', true);
+    }
+  };
+
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 font-black"><ClipboardList size={19} className="text-blue-600" />Driver trip records</h2>
+          <p className="mt-1 text-xs text-slate-500">Permanent history of driver departures and arrivals stored in PostgreSQL.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={!records.length} onClick={() => openPrint(records, 'DatscoGo Driver Trip Records')} className="flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"><Printer size={15} />Print all</button>
+          <button type="button" disabled={!records.length} onClick={deleteAll} className="flex items-center gap-2 rounded-xl border border-red-200 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={15} />Delete all</button>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200">
+        <table className="min-w-[900px] w-full text-left text-xs">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-3">Driver</th><th className="px-3 py-3">Route</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Departure</th><th className="px-3 py-3">Arrival</th><th className="px-3 py-3">Duration</th><th className="px-3 py-3 text-right">Actions</th></tr></thead>
+          <tbody className="divide-y divide-slate-100">
+            {records.map((trip) => <tr key={trip.id} className="hover:bg-slate-50/70"><td className="px-3 py-3 font-bold text-slate-900">{driverName(trip.driverId, trip.driverName)}</td><td className="px-3 py-3 text-slate-700">{routeName(trip.routeId, trip.routeName)}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${trip.status === 'arrived' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{trip.status === 'arrived' ? 'Arrived' : 'Departed'}</span></td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.startedAt)}</td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.arrivedAt)}</td><td className="px-3 py-3 text-slate-600">{tripDuration(trip)}</td><td className="px-3 py-3"><div className="flex justify-end gap-2"><button type="button" onClick={() => openPrint([trip], `DatscoGo Trip Record - ${driverName(trip.driverId, trip.driverName)}`)} className="rounded-lg border border-blue-200 p-2 text-blue-600 hover:bg-blue-50" aria-label="Print trip record"><Printer size={15} /></button><button type="button" onClick={() => deleteRecord(trip)} className="rounded-lg border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label="Delete trip record"><Trash2 size={15} /></button></div></td></tr>)}
+          </tbody>
+        </table>
+        {!loading && records.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No completed driver trip records yet. A record will appear after a driver marks a trip as arrived.</div>}
+        {loading && <div className="p-8 text-center text-sm text-slate-400">Loading trip records…</div>}
+      </div>
+    </section>
+  );
+}
+
 export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const {
     currentUser,
@@ -417,6 +540,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     ['terminals', 'Terminals', MapPinned],
     ['announcements', 'Announcements', Megaphone],
     ['drivers', 'Drivers', UsersRound],
+    ['trip-records', 'Trip records', ClipboardList],
     ['security', 'Security', KeyRound],
   ];
 
@@ -501,6 +625,8 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Registered drivers</h2><div className="mt-4 divide-y divide-slate-100">{drivers.map((driverItem) => <div key={driverItem.id} className="flex items-center justify-between gap-3 py-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><BusFront size={18} /></span><div><p className="text-sm font-bold">{driverItem.displayName}</p><p className="text-xs text-slate-500">@{driverItem.username}</p></div></div><button type="button" onClick={() => { if (window.confirm(`Delete ${driverItem.displayName}'s driver account? This cannot be undone.`)) { deleteDriver(driverItem.id); inform('Driver account deleted.'); } }} className="rounded-xl border border-red-200 p-2 text-red-600 transition hover:bg-red-50" aria-label={`Delete ${driverItem.displayName}`}><Trash2 size={17} /></button></div>)}</div></section>
           </div>
         )}
+
+        {section === 'trip-records' && <TripRecordsPanel accounts={accounts} routes={routes} onNotice={inform} />}
 
         {section === 'security' && (
           <form onSubmit={changePassword} className="max-w-xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4"><p className="flex items-center gap-2 text-sm font-black text-amber-900"><KeyRound size={17} />Replace starter credential</p><p className="mt-1 text-xs leading-5 text-amber-800">Change the simple setup password before using the app beyond demonstration.</p></div><div className="mt-5 space-y-3"><input required type="password" value={password.current} onChange={(event) => setPassword({ ...password, current: event.target.value })} placeholder="Current password" className={inputClass} /><input required type="password" minLength={10} value={password.next} onChange={(event) => setPassword({ ...password, next: event.target.value })} placeholder="New password (10+ characters)" className={inputClass} /><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><KeyRound size={17} />Update administrator password</button></div></form>

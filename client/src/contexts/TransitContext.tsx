@@ -71,6 +71,10 @@ export interface ActiveTrip {
   latitude: number;
   longitude: number;
   lastUpdated: number;
+  startedAt?: number;
+  arrivedAt?: number;
+  driverName?: string;
+  routeName?: string;
 }
 
 export interface Announcement {
@@ -531,7 +535,20 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   const startTrip = useCallback((driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => {
     const route = storeRef.current.routes.find((item) => item.id === routeId);
     const [latitude, longitude] = location ? [location.latitude, location.longitude] : (route?.coordinates[0] ?? [9.7895, 126.1554]);
-    const nextTrip: ActiveTrip = { id: createId('trip'), driverId, routeId, status: 'departed', latitude, longitude, lastUpdated: Date.now() };
+    const driverAccount = storeRef.current.accounts.find((account) => account.id === driverId);
+    const startedAt = Date.now();
+    const nextTrip: ActiveTrip = {
+      id: createId('trip'),
+      driverId,
+      routeId,
+      status: 'departed',
+      latitude,
+      longitude,
+      lastUpdated: startedAt,
+      startedAt,
+      driverName: driverAccount?.displayName,
+      routeName: route?.title,
+    };
     replaceStore((current) => ({ ...current, activeTrips: replaceDriverActiveTrip(current.activeTrips, nextTrip) }));
     void publishTrip(nextTrip);
   }, [replaceStore]);
@@ -549,7 +566,8 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     const existing = current.activeTrips.find((trip) => trip.driverId === driverId);
     if (!existing) return;
     const arrivalLocation = getArrivalLocation(existing, current.routes, current.terminals);
-    const nextTrip: ActiveTrip = { ...existing, status: 'arrived', ...arrivalLocation, lastUpdated: Date.now() };
+    const arrivedAt = Date.now();
+    const nextTrip: ActiveTrip = { ...existing, status: 'arrived', ...arrivalLocation, lastUpdated: arrivedAt, arrivedAt };
     replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId ? nextTrip : trip) }));
     void publishTrip(nextTrip);
   }, [replaceStore]);

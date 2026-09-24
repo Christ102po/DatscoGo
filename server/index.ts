@@ -66,6 +66,42 @@ async function startServer() {
   `;
 
   await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_trip_history (
+      trip_id TEXT PRIMARY KEY,
+      driver_id TEXT NOT NULL,
+      route_id TEXT NOT NULL,
+      trip_value JSONB NOT NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      arrived_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  // Preserve any completed live trips that existed before trip history was added.
+  await sql`
+    INSERT INTO datscogo_trip_history (trip_id, driver_id, route_id, trip_value, started_at, arrived_at, updated_at)
+    SELECT
+      trip_value->>'id',
+      driver_id,
+      trip_value->>'routeId',
+      trip_value,
+      COALESCE(
+        to_timestamp(NULLIF(trip_value->>'startedAt', '')::double precision / 1000.0),
+        updated_at
+      ),
+      COALESCE(
+        to_timestamp(NULLIF(trip_value->>'arrivedAt', '')::double precision / 1000.0),
+        updated_at
+      ),
+      updated_at
+    FROM datscogo_live_trips
+    WHERE trip_value->>'status' = 'arrived'
+      AND COALESCE(trip_value->>'id', '') <> ''
+      AND COALESCE(trip_value->>'routeId', '') <> ''
+    ON CONFLICT (trip_id) DO NOTHING
+  `;
+
+  await sql`
     INSERT INTO datscogo_app_state (state_key, state_value)
     VALUES ('public-state', ${sql.json(EMPTY_PUBLIC_STATE)})
     ON CONFLICT (state_key) DO NOTHING
@@ -310,6 +346,47 @@ async function startServer() {
           updated_at = NOW()
       `;
 
+      const tripId = String(trip.id || "").trim();
+      const routeId = String(trip.routeId || "").trim();
+      if (tripId && routeId && trip.status === "arrived") {
+        const startedAtValue = Number(trip.startedAt || trip.lastUpdated || Date.now());
+        const arrivedAtValue = trip.status === "arrived"
+          ? Number(trip.arrivedAt || trip.lastUpdated || Date.now())
+          : null;
+        const startedAt = new Date(Number.isFinite(startedAtValue) ? startedAtValue : Date.now());
+        const arrivedAt = arrivedAtValue && Number.isFinite(arrivedAtValue)
+          ? new Date(arrivedAtValue)
+          : null;
+
+        await sql`
+          INSERT INTO datscogo_trip_history (
+            trip_id,
+            driver_id,
+            route_id,
+            trip_value,
+            started_at,
+            arrived_at,
+            updated_at
+          )
+          VALUES (
+            ${tripId},
+            ${driverId},
+            ${routeId},
+            ${sql.json(trip)},
+            ${startedAt},
+            ${arrivedAt},
+            NOW()
+          )
+          ON CONFLICT (trip_id)
+          DO UPDATE SET
+            driver_id = EXCLUDED.driver_id,
+            route_id = EXCLUDED.route_id,
+            trip_value = EXCLUDED.trip_value,
+            arrived_at = COALESCE(EXCLUDED.arrived_at, datscogo_trip_history.arrived_at),
+            updated_at = NOW()
+        `;
+      }
+
       res.json({ ok: true });
     } catch (error) {
       console.error("Write trip failed:", error);
@@ -318,6 +395,57 @@ async function startServer() {
         ok: false,
         error: "Unable to save live trip.",
       });
+    }
+  });
+
+  // --------------------------------------------------
+  // DRIVER TRIP HISTORY
+  // --------------------------------------------------
+
+  app.get("/api/trip-records", async (_req, res) => {
+    try {
+      const rows = await sql`
+        SELECT trip_id, driver_id, route_id, trip_value, started_at, arrived_at, updated_at
+        FROM datscogo_trip_history
+        ORDER BY started_at DESC, updated_at DESC
+      `;
+
+      res.setHeader("Cache-Control", "no-store");
+      res.json(rows.map((row) => ({
+        ...row.trip_value,
+        id: row.trip_id,
+        driverId: row.driver_id,
+        routeId: row.route_id,
+        startedAt: new Date(row.started_at).getTime(),
+        arrivedAt: row.arrived_at ? new Date(row.arrived_at).getTime() : undefined,
+        lastUpdated: new Date(row.updated_at).getTime(),
+      })));
+    } catch (error) {
+      console.error("Read trip history failed:", error);
+      res.status(500).json({ error: "Unable to read driver trip records." });
+    }
+  });
+
+  app.delete("/api/trip-records/:tripId", async (req, res) => {
+    const tripId = String(req.params.tripId || "").trim();
+    if (!tripId) return res.status(400).json({ ok: false, error: "Trip ID is required." });
+
+    try {
+      await sql`DELETE FROM datscogo_trip_history WHERE trip_id = ${tripId}`;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Delete trip history failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to delete the trip record." });
+    }
+  });
+
+  app.delete("/api/trip-records", async (_req, res) => {
+    try {
+      await sql`DELETE FROM datscogo_trip_history`;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Delete all trip history failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to delete all trip records." });
     }
   });
 
