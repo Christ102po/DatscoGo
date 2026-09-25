@@ -1,5 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, CheckCircle2, CircleDotDashed, Clock3, LogOut, MapPin, Navigation, RadioTower, RefreshCw, Route, ShieldCheck } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BellRing,
+  CheckCircle2,
+  CircleAlert,
+  CircleDotDashed,
+  Clock3,
+  LogOut,
+  MapPin,
+  Navigation,
+  RadioTower,
+  Route,
+  ShieldCheck,
+  Siren,
+} from 'lucide-react';
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { useTransit } from '../../contexts/TransitContext';
 import { DriverLocationMap } from './DriverLocationMap';
@@ -10,23 +23,41 @@ interface DriverDashboardProps {
 }
 
 export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) => {
-  const { currentUser, routes, activeTrips, startTrip, updateTripLocation, arriveTrip } = useTransit();
+  const {
+    currentUser,
+    routes,
+    activeTrips,
+    startTrip,
+    updateTripLocation,
+    cancelTripSafetyCheck,
+    reportTripIncident,
+    arriveTrip,
+  } = useTransit();
   const [selectedRouteId, setSelectedRouteId] = useState(routes[0]?.id ?? '');
   const [locationMessage, setLocationMessage] = useState('Location sharing is off.');
   const [isLocating, setIsLocating] = useState(false);
   const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [showLocationPermission, setShowLocationPermission] = useState(false);
   const [locationConsent, setLocationConsent] = useState(false);
-  const [pendingLocationAction, setPendingLocationAction] = useState<'initial' | 'departure' | 'update'>('initial');
+  const [pendingLocationAction, setPendingLocationAction] = useState<'initial' | 'departure'>('initial');
+  const [safetyCountdown, setSafetyCountdown] = useState(10);
+  const [safetyActionBusy, setSafetyActionBusy] = useState(false);
+  const [safetyActionError, setSafetyActionError] = useState('');
+  const lastPublishedLocationAt = useRef(0);
 
   const availableRoutes = routes.filter((route) => route.available);
   const selectedRoute = routes.find((route) => route.id === selectedRouteId) ?? availableRoutes[0];
   const ownTrip = activeTrips.find((trip) => trip.driverId === currentUser?.id) ?? null;
   const tripRoute = useMemo(() => routes.find((route) => route.id === ownTrip?.routeId), [ownTrip?.routeId, routes]);
+  const safetyCheckPending = ownTrip?.status === 'departed' && ownTrip.safetyCheckStatus === 'pending' && !!ownTrip.safetyCheckDeadlineAt;
+
+  useEffect(() => {
+    if (!selectedRouteId && availableRoutes[0]) setSelectedRouteId(availableRoutes[0].id);
+  }, [availableRoutes, selectedRouteId]);
 
   const useDeviceLocation = (callback: (location: { latitude: number; longitude: number }) => void) => {
     if (!navigator.geolocation) {
-      setLocationMessage('This device does not support location services, so live GPS sharing cannot start.');
+      setLocationMessage('This device does not support location services, so automatic GPS sharing cannot start.');
       return;
     }
 
@@ -38,14 +69,14 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
         setLocationConsent(true);
         setShowLocationPermission(false);
         callback(location);
-        setLocationMessage(`Location shared at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
+        setLocationMessage(`GPS ready at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Automatic tracking will continue during the trip.`);
         setIsLocating(false);
       },
       (error) => {
         setShowLocationPermission(false);
         setLocationConsent(false);
         setLocationMessage(error.code === error.PERMISSION_DENIED
-          ? 'Location permission was denied. Enable it in your browser/site settings before starting live GPS sharing.'
+          ? 'Location permission was denied. Enable it in your browser/site settings before starting automatic GPS sharing.'
           : 'Your GPS location is unavailable right now. Check phone location services and try again.');
         setIsLocating(false);
       },
@@ -59,8 +90,6 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
       if (!currentUser) return;
       if (pendingLocationAction === 'departure' && selectedRoute) {
         startTrip(currentUser.id, selectedRoute.id, location);
-      } else if (pendingLocationAction === 'update' && ownTrip) {
-        updateTripLocation(currentUser.id, location);
       }
       setPendingLocationAction('initial');
     });
@@ -71,20 +100,10 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
     if (!locationConsent) {
       setPendingLocationAction('departure');
       setShowLocationPermission(true);
-      setLocationMessage('Allow location access before starting a departure so passengers can receive the Datsco GPS position.');
+      setLocationMessage('Allow location access before starting departure. DatscoGo will update the vehicle position automatically after that.');
       return;
     }
     useDeviceLocation((location) => startTrip(currentUser.id, selectedRoute.id, location));
-  };
-
-  const handleLocationUpdate = () => {
-    if (!ownTrip || !currentUser) return;
-    if (!locationConsent) {
-      setPendingLocationAction('update');
-      setShowLocationPermission(true);
-      return;
-    }
-    useDeviceLocation((location) => updateTripLocation(currentUser.id, location));
   };
 
   useEffect(() => {
@@ -119,27 +138,67 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
       }
     };
 
-    prepareDriverPermission();
+    void prepareDriverPermission();
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!currentUser || ownTrip?.status !== 'departed' || !navigator.geolocation || !locationConsent) return;
 
-    setLocationMessage('Live location refresh is active while this driver dashboard is open.');
+    setLocationMessage('Automatic live GPS tracking is active. No manual location update is required.');
+    lastPublishedLocationAt.current = 0;
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
         setDeviceLocation(location);
-        updateTripLocation(currentUser.id, location);
-        setLocationMessage(`Live location refreshed at ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`);
+
+        const now = Date.now();
+        if (now - lastPublishedLocationAt.current >= 4000) {
+          lastPublishedLocationAt.current = now;
+          updateTripLocation(currentUser.id, location);
+          setLocationMessage(`Automatic GPS updated at ${new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. No manual update is required.`);
+        }
       },
-      () => setLocationMessage('Live refresh needs location permission. Use Update location to retry.'),
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+      (error) => {
+        setLocationMessage(error.code === error.PERMISSION_DENIED
+          ? 'Automatic GPS stopped because location permission is blocked. Re-enable location permission to continue sharing.'
+          : 'Automatic GPS is temporarily unavailable. DatscoGo will keep trying while this dashboard is open.');
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 2000 },
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
   }, [currentUser?.id, ownTrip?.status, updateTripLocation, locationConsent]);
+
+  useEffect(() => {
+    if (!safetyCheckPending || !ownTrip?.safetyCheckDeadlineAt) {
+      setSafetyCountdown(10);
+      setSafetyActionBusy(false);
+      setSafetyActionError('');
+      return;
+    }
+
+    const updateCountdown = () => {
+      const remaining = Math.max(0, Math.ceil((ownTrip.safetyCheckDeadlineAt! - Date.now()) / 1000));
+      setSafetyCountdown(remaining);
+    };
+    updateCountdown();
+    const timer = window.setInterval(updateCountdown, 200);
+    return () => window.clearInterval(timer);
+  }, [ownTrip?.safetyCheckDeadlineAt, safetyCheckPending]);
+
+  const handleSafetyAction = async (action: 'report' | 'cancel') => {
+    if (!currentUser || safetyActionBusy || safetyCountdown <= 0) return;
+    setSafetyActionBusy(true);
+    setSafetyActionError('');
+    const result = action === 'report'
+      ? await reportTripIncident(currentUser.id)
+      : await cancelTripSafetyCheck(currentUser.id);
+    if (!result.ok) {
+      setSafetyActionError(result.error ?? 'Unable to send the safety response.');
+      setSafetyActionBusy(false);
+    }
+  };
 
   return (
     <main className="min-h-[100dvh] bg-slate-50 text-slate-900">
@@ -159,7 +218,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
           <div className="rounded-3xl bg-gradient-to-br from-blue-700 to-blue-500 p-6 text-white shadow-xl shadow-blue-600/20">
             <p className="text-sm font-medium text-blue-100">Welcome back</p>
             <h1 className="mt-1 text-2xl font-black">{currentUser?.displayName ?? 'Driver'}</h1>
-            <p className="mt-3 max-w-lg text-sm leading-6 text-blue-50">Use this dashboard to announce a departure, keep passenger trip status current, and confirm your arrival at the destination.</p>
+            <p className="mt-3 max-w-lg text-sm leading-6 text-blue-50">Start the trip once. DatscoGo will then keep the vehicle position updated automatically and monitor prolonged stops for driver safety.</p>
           </div>
 
           <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
@@ -184,20 +243,20 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
               <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
                 <div className="flex items-center gap-3">
                   <span className="rounded-xl bg-blue-600 p-2 text-white"><Route size={19} /></span>
-                  <div><p className="text-sm font-bold text-slate-900">{tripRoute.title}</p><p className="mt-0.5 text-xs text-slate-500">Last update {new Date(ownTrip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p></div>
+                  <div><p className="text-sm font-bold text-slate-900">{tripRoute.title}</p><p className="mt-0.5 text-xs text-slate-500">Last GPS update {new Date(ownTrip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p></div>
                 </div>
               </div>
             )}
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               {!ownTrip || ownTrip.status === 'arrived' ? (
-                <button type="button" disabled={!selectedRoute || isLocating} onClick={handleDeparture} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"><Navigation size={18} /> {isLocating ? 'Getting location…' : 'Start departure'}</button>
+                <button type="button" disabled={!selectedRoute || isLocating} onClick={handleDeparture} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-600/20 transition hover:bg-emerald-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"><Navigation size={18} /> {isLocating ? 'Getting GPS…' : 'Start departure'}</button>
               ) : (
-                <button type="button" disabled={isLocating} onClick={handleLocationUpdate} className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-60 active:scale-[0.98]"><RefreshCw className={isLocating ? 'animate-spin' : ''} size={18} /> {isLocating ? 'Getting location…' : 'Update location'}</button>
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700"><RadioTower size={18} /> GPS updates automatically</div>
               )}
               {ownTrip?.status === 'departed' && <button type="button" onClick={() => currentUser && arriveTrip(currentUser.id)} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"><CheckCircle2 size={18} /> Mark as arrived</button>}
             </div>
-            <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-500"><MapPin size={15} className="mt-0.5 shrink-0 text-blue-600" /> {locationMessage} Passengers see the latest saved vehicle position in their DatscoGo view.</p>
+            <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-500"><MapPin size={15} className="mt-0.5 shrink-0 text-blue-600" /> {locationMessage} Passengers receive the latest saved position automatically.</p>
             <div className="mt-4"><DriverLocationMap location={deviceLocation ?? (ownTrip ? { latitude: ownTrip.latitude, longitude: ownTrip.longitude } : null)} route={tripRoute ?? selectedRoute} /></div>
           </section>
         </section>
@@ -208,7 +267,8 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
             <div className="mt-4 space-y-3">
               {[
                 [CircleDotDashed, 'Departure', ownTrip?.status === 'departed' ? 'Broadcast to passengers' : 'Waiting for driver action'],
-                [Clock3, 'Latest report', ownTrip ? new Date(ownTrip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'No trip location reported'],
+                [Clock3, 'GPS sharing', ownTrip?.status === 'departed' ? 'Automatic tracking active' : 'Starts automatically after departure'],
+                [ShieldCheck, 'Safety monitor', ownTrip?.status === 'departed' ? 'Checks for 30 minutes without movement' : 'Starts with an active trip'],
                 [BellRing, 'Arrival', ownTrip?.status === 'arrived' ? 'Arrival confirmed' : 'Confirm when destination is reached'],
               ].map(([Icon, label, detail]) => {
                 const StatusIcon = Icon as typeof CircleDotDashed;
@@ -217,11 +277,40 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
             </div>
           </section>
           <section className="rounded-3xl border border-amber-200 bg-amber-50 p-5">
-            <h2 className="flex items-center gap-2 text-sm font-black text-amber-900"><ShieldCheck size={18} /> Driver reminder</h2>
-            <p className="mt-2 text-xs leading-5 text-amber-800">Only start a departure when passengers can board. Mark the route as arrived when the vehicle reaches its destination; the passenger map will retain that terminal position until the next trip begins.</p>
+            <h2 className="flex items-center gap-2 text-sm font-black text-amber-900"><ShieldCheck size={18} /> Safety monitoring</h2>
+            <p className="mt-2 text-xs leading-5 text-amber-800">If the Datsco has not meaningfully moved for 30 minutes, a 10-second safety check will appear. Report an accident if help may be needed, or press Cancel if the stop is normal.</p>
           </section>
         </aside>
       </div>
+
+      {safetyCheckPending && (
+        <div className="fixed inset-0 z-[2000] grid place-items-center bg-slate-950/70 p-4 backdrop-blur-sm" role="alertdialog" aria-modal="true" aria-labelledby="driver-safety-title">
+          <section className="w-full max-w-md rounded-3xl border border-red-200 bg-white p-6 shadow-2xl shadow-red-950/30">
+            <div className="flex items-start gap-4">
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-red-100 text-red-600"><Siren size={25} /></span>
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.14em] text-red-600">Driver safety check</p>
+                <h2 id="driver-safety-title" className="mt-1 text-xl font-black text-slate-950">Is something wrong?</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-600">The Datsco has not moved for about 30 minutes. Please respond before the countdown ends.</p>
+              </div>
+            </div>
+
+            <div className="my-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-center">
+              <p className="text-xs font-bold uppercase tracking-[0.12em] text-red-700">Automatic admin alert in</p>
+              <p className="mt-1 text-4xl font-black tabular-nums text-red-700">{safetyCountdown}</p>
+              <p className="text-xs font-bold text-red-600">seconds</p>
+            </div>
+
+            {safetyCountdown <= 0 && <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold leading-5 text-red-800"><CircleAlert className="mt-0.5 shrink-0" size={16} />No response was received. DatscoGo is automatically notifying the administrator that something may be wrong.</div>}
+            {safetyActionError && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-800">{safetyActionError}</div>}
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button type="button" disabled={safetyActionBusy || safetyCountdown <= 0} onClick={() => void handleSafetyAction('report')} className="flex items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3 text-sm font-black text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"><Siren size={18} /> Report accident</button>
+              <button type="button" disabled={safetyActionBusy || safetyCountdown <= 0} onClick={() => void handleSafetyAction('cancel')} className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60">Cancel · I’m safe</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       <LocationPermissionPrompt
         open={showLocationPermission}
@@ -231,7 +320,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
         onNotNow={() => {
           setShowLocationPermission(false);
           setPendingLocationAction('initial');
-          setLocationMessage('Location access was skipped. Allow GPS before starting a departure to share the live Datsco position.');
+          setLocationMessage('Location access was skipped. Allow GPS before starting a departure so automatic tracking can work.');
         }}
       />
     </main>

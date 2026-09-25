@@ -15,6 +15,7 @@ import {
   Printer,
   Route,
   ShieldCheck,
+  Siren,
   Trash2,
   UsersRound,
   X,
@@ -507,6 +508,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     addSchedule,
     deleteSchedule,
     updateContact,
+    resolveTripIncident,
   } = useTransit();
 
   const [section, setSection] = useState<Section>('overview');
@@ -528,6 +530,8 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   const drivers = accounts.filter((account) => account.role === 'driver');
   const liveTripCount = activeTrips.filter((trip) => trip.status === 'departed').length;
   const arrivedTripCount = activeTrips.filter((trip) => trip.status === 'arrived').length;
+  const incidentTrips = activeTrips.filter((trip) => trip.safetyIncident?.active);
+  const pendingSafetyChecks = activeTrips.filter((trip) => trip.status === 'departed' && trip.safetyCheckStatus === 'pending').length;
   const inform = (text: string, error = false) => {
     setNotice({ text, error });
     window.setTimeout(() => setNotice(null), 3500);
@@ -545,6 +549,13 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   ];
 
   const routeLabel = (routeId: string) => routes.find((route) => route.id === routeId)?.title ?? 'Unknown route';
+  const driverLabel = (driverId: string, snapshotName?: string) => snapshotName || accounts.find((account) => account.id === driverId)?.displayName || 'Unknown driver';
+
+  const resolveSafetyAlert = async (driverId: string) => {
+    const result = await resolveTripIncident(driverId);
+    if (!result.ok) return inform(result.error ?? 'Unable to resolve the safety alert.', true);
+    inform('Driver safety alert resolved.');
+  };
 
   const createNewDriver = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -589,6 +600,32 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
 
         {notice && <div role="status" className={`mb-5 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${notice.error ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{notice.error ? <CircleAlert size={17} /> : <Check size={17} />}{notice.text}</div>}
 
+        {incidentTrips.length > 0 && (
+          <section className="mb-5 overflow-hidden rounded-3xl border-2 border-red-300 bg-red-50 shadow-lg shadow-red-900/10">
+            <div className="flex items-center gap-3 bg-red-600 px-4 py-3 text-white sm:px-5">
+              <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/15"><Siren size={20} /></span>
+              <div className="min-w-0 flex-1"><p className="text-xs font-black uppercase tracking-[0.14em] text-red-100">Urgent driver safety alert</p><p className="text-sm font-black">{incidentTrips.length === 1 ? '1 Datsco may need assistance' : `${incidentTrips.length} Datsco vehicles may need assistance`}</p></div>
+            </div>
+            <div className="divide-y divide-red-200">
+              {incidentTrips.map((trip) => {
+                const incident = trip.safetyIncident!;
+                const sourceLabel = incident.source === 'driver_reported' ? 'Driver reported an accident/emergency' : 'Automatic alert · no response after 10 seconds';
+                return (
+                  <div key={incident.id} className="grid gap-3 p-4 sm:grid-cols-[1fr_auto] sm:items-center sm:p-5">
+                    <div>
+                      <p className="text-sm font-black text-red-950">{driverLabel(trip.driverId, trip.driverName)} · {routeLabel(trip.routeId)}</p>
+                      <p className="mt-1 text-xs font-bold text-red-800">{sourceLabel}</p>
+                      <p className="mt-1 text-xs leading-5 text-red-700">{incident.message}</p>
+                      <p className="mt-2 text-[11px] font-semibold text-red-700">Alerted {new Date(incident.createdAt).toLocaleString()} · Last location {incident.latitude.toFixed(5)}, {incident.longitude.toFixed(5)}</p>
+                    </div>
+                    <button type="button" onClick={() => void resolveSafetyAlert(trip.driverId)} className="rounded-xl bg-red-600 px-4 py-2.5 text-xs font-black text-white transition hover:bg-red-700">Resolve alert</button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {section === 'overview' && (
           <div className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -603,7 +640,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
                 return <article key={label as string} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><span className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600"><MetricIcon size={20} /></span><p className="mt-4 text-2xl font-black">{value as string | number}</p><p className="mt-1 text-xs font-bold uppercase tracking-[.1em] text-slate-500">{label as string}</p></article>;
               })}
             </div>
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h2 className="text-base font-black">Vehicle trips</h2><p className="mt-2 text-sm text-slate-600">{activeTrips.length ? `${liveTripCount} live vehicle${liveTripCount === 1 ? '' : 's'} and ${arrivedTripCount} vehicle${arrivedTripCount === 1 ? '' : 's'} at destination.` : 'No driver is currently reporting an active trip.'}</p></article>
+            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h2 className="text-base font-black">Vehicle trips</h2><p className="mt-2 text-sm text-slate-600">{activeTrips.length ? `${liveTripCount} live vehicle${liveTripCount === 1 ? '' : 's'} and ${arrivedTripCount} vehicle${arrivedTripCount === 1 ? '' : 's'} at destination.` : 'No driver is currently reporting an active trip.'}</p>{pendingSafetyChecks > 0 && <p className="mt-2 text-xs font-bold text-amber-700">{pendingSafetyChecks} driver safety check{pendingSafetyChecks === 1 ? '' : 's'} currently awaiting a response.</p>}</article>
             <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-base font-black">Public contact details</h2><div className="mt-4 grid gap-3 sm:grid-cols-3"><input value={contact.facebook} onChange={(event) => updateContact({ ...contact, facebook: event.target.value })} placeholder="Facebook page" className={inputClass} /><input value={contact.phone} onChange={(event) => updateContact({ ...contact, phone: event.target.value })} placeholder="Contact number" className={inputClass} /><input type="email" value={contact.email} onChange={(event) => updateContact({ ...contact, email: event.target.value })} placeholder="Email address" className={inputClass} /></div></article>
           </div>
         )}

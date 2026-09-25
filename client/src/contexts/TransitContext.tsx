@@ -63,6 +63,17 @@ export interface Terminal {
   longitude: number;
 }
 
+export interface SafetyIncident {
+  id: string;
+  active: boolean;
+  source: 'driver_reported' | 'no_response';
+  createdAt: number;
+  resolvedAt?: number;
+  message: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface ActiveTrip {
   id: string;
   driverId: string;
@@ -75,6 +86,14 @@ export interface ActiveTrip {
   arrivedAt?: number;
   driverName?: string;
   routeName?: string;
+  lastMovedAt?: number;
+  movementAnchorLatitude?: number;
+  movementAnchorLongitude?: number;
+  safetyResetAt?: number;
+  safetyCheckStatus?: 'idle' | 'pending' | 'alerted';
+  safetyCheckStartedAt?: number;
+  safetyCheckDeadlineAt?: number;
+  safetyIncident?: SafetyIncident;
 }
 
 export interface Announcement {
@@ -130,6 +149,9 @@ interface TransitContextValue extends TransitStore {
   toggleAnnouncement: (announcementId: string) => void;
   startTrip: (driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => void;
   updateTripLocation: (driverId: string, location: { latitude: number; longitude: number }) => void;
+  cancelTripSafetyCheck: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
+  reportTripIncident: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
+  resolveTripIncident: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
   arriveTrip: (driverId: string) => void;
 }
 
@@ -269,6 +291,19 @@ async function publishTrip(trip: ActiveTrip) {
   } catch {
     // Keep the local trip functional if the shared API is unavailable.
   }
+}
+
+async function publishSafetyAction(driverId: string, action: 'cancel' | 'report' | 'resolve') {
+  const response = await fetch(`/api/trips/${encodeURIComponent(driverId)}/safety`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action }),
+  });
+  const payload = await response.json().catch(() => ({})) as { trip?: ActiveTrip; error?: string };
+  if (!response.ok || !payload.trip) {
+    throw new Error(payload.error || 'Unable to update the driver safety alert.');
+  }
+  return payload.trip;
 }
 
 export function getRoutesUsingTerminal(routes: TransitRoute[], terminalId: string) {
@@ -546,6 +581,11 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
       longitude,
       lastUpdated: startedAt,
       startedAt,
+      lastMovedAt: startedAt,
+      movementAnchorLatitude: latitude,
+      movementAnchorLongitude: longitude,
+      safetyResetAt: startedAt,
+      safetyCheckStatus: 'idle',
       driverName: driverAccount?.displayName,
       routeName: route?.title,
     };
@@ -560,6 +600,20 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId && trip.status === 'departed' ? nextTrip : trip) }));
     void publishTrip(nextTrip);
   }, [replaceStore]);
+
+  const runSafetyAction = useCallback(async (driverId: string, action: 'cancel' | 'report' | 'resolve') => {
+    try {
+      const nextTrip = await publishSafetyAction(driverId, action);
+      replaceStore((current) => ({ ...current, activeTrips: replaceDriverActiveTrip(current.activeTrips, nextTrip) }));
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Unable to update the driver safety alert.' };
+    }
+  }, [replaceStore]);
+
+  const cancelTripSafetyCheck = useCallback((driverId: string) => runSafetyAction(driverId, 'cancel'), [runSafetyAction]);
+  const reportTripIncident = useCallback((driverId: string) => runSafetyAction(driverId, 'report'), [runSafetyAction]);
+  const resolveTripIncident = useCallback((driverId: string) => runSafetyAction(driverId, 'resolve'), [runSafetyAction]);
 
   const arriveTrip = useCallback((driverId: string) => {
     const current = storeRef.current;
@@ -594,8 +648,11 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     toggleAnnouncement,
     startTrip,
     updateTripLocation,
+    cancelTripSafetyCheck,
+    reportTripIncident,
+    resolveTripIncident,
     arriveTrip,
-  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, arriveTrip]);
+  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
 
   return <TransitContext.Provider value={value}>{children}</TransitContext.Provider>;
 };
