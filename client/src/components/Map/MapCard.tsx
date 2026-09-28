@@ -126,33 +126,73 @@ const TerminalMarker: React.FC<{ terminal: { id: string; name: string; details: 
 
 type MapStyle = 'street' | 'satellite' | 'terrain' | 'hybrid';
 
-const MAP_STYLES: Record<MapStyle, { label: string; url: string; attribution: string; maxZoom: number; labelsUrl?: string }> = {
-  street: {
-    label: 'Street',
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19,
-  },
-  satellite: {
-    label: 'Satellite',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri',
-    maxZoom: 19,
-  },
-  terrain: {
-    label: 'Terrain',
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Map style &copy; OpenTopoMap',
-    maxZoom: 17,
-  },
-  hybrid: {
-    label: 'Hybrid',
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    labelsUrl: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
-    attribution: 'Tiles &copy; Esri | Labels &copy; OpenStreetMap contributors &copy; CARTO',
-    maxZoom: 19,
-  },
+type MapStyleConfig = {
+  label: string;
+  url: string;
+  attribution: string;
+  maxZoom: number;
+  labelsUrl?: string;
 };
+
+const MAPTILER_API_KEY = String(import.meta.env.VITE_MAPTILER_API_KEY ?? '').trim();
+const hasMapTilerKey = MAPTILER_API_KEY.length > 0;
+const mapTilerRasterUrl = (mapId: string) =>
+  `https://api.maptiler.com/maps/${mapId}/256/{z}/{x}/{y}.png?key=${encodeURIComponent(MAPTILER_API_KEY)}`;
+
+const MAP_STYLES: Record<MapStyle, MapStyleConfig> = hasMapTilerKey
+  ? {
+      street: {
+        label: 'Street',
+        url: mapTilerRasterUrl('streets-v4'),
+        attribution: '&copy; MapTiler &copy; OpenStreetMap contributors',
+        maxZoom: 22,
+      },
+      satellite: {
+        label: 'Satellite',
+        url: mapTilerRasterUrl('satellite-v4'),
+        attribution: '&copy; MapTiler',
+        maxZoom: 22,
+      },
+      terrain: {
+        label: 'Terrain',
+        url: mapTilerRasterUrl('topo-v4'),
+        attribution: '&copy; MapTiler &copy; OpenStreetMap contributors',
+        maxZoom: 22,
+      },
+      hybrid: {
+        label: 'Hybrid',
+        url: mapTilerRasterUrl('hybrid-v4'),
+        attribution: '&copy; MapTiler &copy; OpenStreetMap contributors',
+        maxZoom: 22,
+      },
+    }
+  : {
+      street: {
+        label: 'Street',
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19,
+      },
+      satellite: {
+        label: 'Satellite',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attribution: 'Tiles &copy; Esri',
+        maxZoom: 19,
+      },
+      terrain: {
+        label: 'Terrain',
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Map style &copy; OpenTopoMap',
+        maxZoom: 17,
+      },
+      hybrid: {
+        label: 'Hybrid',
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        labelsUrl: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
+        attribution: 'Tiles &copy; Esri | Labels &copy; OpenStreetMap contributors &copy; CARTO',
+        maxZoom: 19,
+      },
+    };
 
 interface LiveEtaState {
   tripId: string | null;

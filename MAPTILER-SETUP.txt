@@ -1,0 +1,16 @@
+DATSC OGO MAPTILER SETUP
+
+Local development
+1. Copy .env.example to .env
+2. Set VITE_MAPTILER_API_KEY to your MapTiler API key
+3. Restart the Vite dev server
+
+Render deployment
+1. Open your DatscoGo Render Web Service
+2. Environment > Add Environment Variable
+3. Key: VITE_MAPTILER_API_KEY
+4. Value: your MapTiler API key
+5. Save and redeploy
+
+Important: VITE_ variables are injected into the frontend during build, so redeploy after changing the key.
+If the key is missing, DatscoGo falls back to the existing public map layers instead of breaking the map.
