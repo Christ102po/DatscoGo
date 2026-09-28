@@ -4,6 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 interface TerminalLocationPickerProps {
+  label?: string;
   value: { latitude: number; longitude: number } | null;
   onChange: (value: { latitude: number; longitude: number }) => void;
 }
@@ -26,9 +27,9 @@ const MapClickListener: React.FC<TerminalLocationPickerProps> = ({ value, onChan
   return value ? <Marker position={[value.latitude, value.longitude]} icon={selectedLocationIcon} /> : null;
 };
 
-export const TerminalLocationPicker: React.FC<TerminalLocationPickerProps> = ({ value, onChange }) => (
+export const TerminalLocationPicker: React.FC<TerminalLocationPickerProps> = ({ value, onChange, label = 'terminal' }) => (
   <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-    <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2"><p className="text-xs font-bold text-slate-700">Click on Siargao to place the terminal</p><span className="text-[10px] font-semibold text-blue-600">{value ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : 'No pin selected'}</span></div>
+    <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2"><p className="text-xs font-bold text-slate-700">Click on Siargao to place the {label}</p><span className="text-[10px] font-semibold text-blue-600">{value ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : 'No pin selected'}</span></div>
     <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-64 w-full sm:h-72" attributionControl>
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={18} attribution="&copy; OpenStreetMap contributors" />
       <MapClickListener value={value} onChange={onChange} />

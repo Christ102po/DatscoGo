@@ -23,6 +23,7 @@ const EMPTY_PUBLIC_STATE = {
   routes: [],
   schedules: [],
   terminals: [],
+  repairShops: [],
   announcements: [],
   contact: { facebook: "", phone: "", email: "" },
 };

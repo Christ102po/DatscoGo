@@ -63,6 +63,16 @@ export interface Terminal {
   longitude: number;
 }
 
+export interface RepairShop {
+  id: string;
+  name: string;
+  details: string;
+  contact: string;
+  latitude: number;
+  longitude: number;
+  active: boolean;
+}
+
 export interface SafetyIncident {
   id: string;
   active: boolean;
@@ -118,18 +128,20 @@ interface TransitStore {
   routes: TransitRoute[];
   schedules: ScheduleEntry[];
   terminals: Terminal[];
+  repairShops: RepairShop[];
   activeTrips: ActiveTrip[];
   announcements: Announcement[];
   contact: ContactDetails;
 }
 
-type StoredTransitStore = Omit<TransitStore, 'activeTrips' | 'announcements'> & {
+type StoredTransitStore = Omit<TransitStore, 'activeTrips' | 'announcements' | 'repairShops'> & {
   activeTrips?: ActiveTrip[];
   activeTrip?: ActiveTrip | null;
+  repairShops?: RepairShop[];
   announcements?: Announcement[];
 };
 
-type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'announcements' | 'contact'>;
+type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'repairShops' | 'announcements' | 'contact'>;
 
 interface TransitContextValue extends TransitStore {
   currentUser: Omit<Account, 'passwordHash'> | null;
@@ -147,6 +159,9 @@ interface TransitContextValue extends TransitStore {
   addTerminal: (input: Omit<Terminal, 'id'>) => void;
   updateTerminal: (terminalId: string, changes: Partial<Omit<Terminal, 'id'>>) => void;
   deleteTerminal: (terminalId: string) => { ok: boolean; affectedRoutes: string[] };
+  addRepairShop: (input: Omit<RepairShop, 'id'>) => void;
+  updateRepairShop: (shopId: string, changes: Partial<Omit<RepairShop, 'id'>>) => void;
+  deleteRepairShop: (shopId: string) => void;
   updateContact: (changes: ContactDetails) => void;
   addAnnouncement: (input: { title: string; message: string; imageDataUrl?: string }) => Promise<{ ok: boolean; error?: string }>;
   deleteAnnouncement: (announcementId: string) => void;
@@ -179,6 +194,7 @@ const initialStore: TransitStore = {
   routes: [],
   schedules: [],
   terminals: [],
+  repairShops: [],
   activeTrips: [],
   announcements: [],
   contact: { facebook: '', phone: '', email: '' },
@@ -246,6 +262,7 @@ function normalizeStoredStore(store: StoredTransitStore): TransitStore {
     terminals,
     routes,
     activeTrips,
+    repairShops: Array.isArray(store.repairShops) ? store.repairShops : [],
     announcements: Array.isArray(store.announcements) ? store.announcements : [],
     contact: store.contact ?? initialStore.contact,
   };
@@ -256,6 +273,7 @@ function publicStateFrom(store: TransitStore): PublicTransitState {
     routes: store.routes,
     schedules: store.schedules,
     terminals: store.terminals,
+    repairShops: store.repairShops,
     announcements: store.announcements,
     contact: store.contact,
   };
@@ -418,6 +436,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
             routes: acceptRemotePublicState && Array.isArray(publicState?.routes) ? publicState!.routes.map((route) => normalizeRoute(route, Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals)) : current.routes,
             schedules: acceptRemotePublicState && Array.isArray(publicState?.schedules) ? publicState!.schedules : current.schedules,
             terminals: acceptRemotePublicState && Array.isArray(publicState?.terminals) ? publicState!.terminals : current.terminals,
+            repairShops: acceptRemotePublicState && Array.isArray(publicState?.repairShops) ? publicState!.repairShops : current.repairShops,
             announcements: acceptRemotePublicState && Array.isArray(publicState?.announcements) ? publicState!.announcements : current.announcements,
             contact: acceptRemotePublicState ? (publicState?.contact ?? current.contact) : current.contact,
             activeTrips: Array.isArray(remoteTrips) ? remoteTrips : current.activeTrips,
@@ -583,6 +602,21 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     return { ok: true, affectedRoutes: [] };
   }, [replaceStore, store.routes, store.terminals]);
 
+  const addRepairShop = useCallback((input: Omit<RepairShop, 'id'>) => {
+    replaceStore((current) => ({ ...current, repairShops: [...current.repairShops, { ...input, id: createId('repair-shop') }] }), true);
+  }, [replaceStore]);
+
+  const updateRepairShop = useCallback((shopId: string, changes: Partial<Omit<RepairShop, 'id'>>) => {
+    replaceStore((current) => ({
+      ...current,
+      repairShops: current.repairShops.map((shop) => shop.id === shopId ? { ...shop, ...changes } : shop),
+    }), true);
+  }, [replaceStore]);
+
+  const deleteRepairShop = useCallback((shopId: string) => {
+    replaceStore((current) => ({ ...current, repairShops: current.repairShops.filter((shop) => shop.id !== shopId) }), true);
+  }, [replaceStore]);
+
   const updateContact = useCallback((changes: ContactDetails) => {
     replaceStore((current) => ({ ...current, contact: changes }), true);
   }, [replaceStore]);
@@ -725,6 +759,9 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     addTerminal,
     updateTerminal,
     deleteTerminal,
+    addRepairShop,
+    updateRepairShop,
+    deleteRepairShop,
     updateContact,
     addAnnouncement,
     deleteAnnouncement,
@@ -735,7 +772,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     reportTripIncident,
     resolveTripIncident,
     arriveTrip,
-  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, removeLiveLocation, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
+  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, removeLiveLocation, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, addRepairShop, updateRepairShop, deleteRepairShop, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
 
   return <TransitContext.Provider value={value}>{children}</TransitContext.Provider>;
 };

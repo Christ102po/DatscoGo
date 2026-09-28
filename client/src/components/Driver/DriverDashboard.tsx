@@ -26,6 +26,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
   const {
     currentUser,
     routes,
+    repairShops,
     activeTrips,
     startTrip,
     updateTripLocation,
@@ -257,7 +258,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
               {ownTrip?.status === 'departed' && <button type="button" onClick={() => currentUser && arriveTrip(currentUser.id)} className="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 active:scale-[0.98]"><CheckCircle2 size={18} /> Mark as arrived</button>}
             </div>
             <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-slate-500"><MapPin size={15} className="mt-0.5 shrink-0 text-blue-600" /> {locationMessage} Passengers receive the latest saved position automatically.</p>
-            <div className="mt-4"><DriverLocationMap location={deviceLocation ?? (ownTrip ? { latitude: ownTrip.latitude, longitude: ownTrip.longitude } : null)} route={tripRoute ?? selectedRoute} /></div>
+            <div className="mt-4"><DriverLocationMap location={deviceLocation ?? (ownTrip ? { latitude: ownTrip.latitude, longitude: ownTrip.longitude } : null)} route={tripRoute ?? selectedRoute} repairShops={repairShops} /></div>
           </section>
         </section>
 
