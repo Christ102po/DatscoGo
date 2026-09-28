@@ -220,3 +220,23 @@
     transition: none;
   }
 }
+
+
+@keyframes datscogo-departure-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.datscogo-departure-marquee {
+  animation: datscogo-departure-marquee 22s linear infinite;
+  padding-left: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .datscogo-departure-marquee {
+    animation: none;
+    width: auto;
+    white-space: normal;
+    padding-right: 1rem;
+  }
+}

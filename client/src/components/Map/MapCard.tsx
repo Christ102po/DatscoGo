@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Filter, Layers, LocateFixed, Navigation, X } from 'lucide-react';
+import { AlertTriangle, BellRing, Filter, Layers, LocateFixed, Navigation, X } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -260,6 +260,110 @@ function formatGuidanceDistance(distanceMeters: number | null) {
   return `${(distanceMeters / 1000).toFixed(distanceMeters < 10000 ? 1 : 0)} km`;
 }
 
+
+
+const DEPARTURE_ALERT_WINDOW_MINUTES = 10;
+
+type UpcomingDeparture = {
+  scheduleId: string;
+  routeTitle: string;
+  origin: string;
+  destination: string;
+  departureAt: number;
+  minutesUntil: number;
+};
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+function normaliseScheduleText(value: string) {
+  return value.toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+}
+
+function scheduleRunsOnDay(daysText: string, date: Date) {
+  const text = normaliseScheduleText(daysText || '');
+  const dayIndex = date.getDay();
+  const dayName = DAY_NAMES[dayIndex].toLowerCase();
+  const shortName = dayName.slice(0, 3);
+
+  if (!text || /\b(daily|every day|everyday)\b/.test(text)) return true;
+  if (/\bweekdays?\b/.test(text)) return dayIndex >= 1 && dayIndex <= 5;
+  if (/\bweekends?\b/.test(text)) return dayIndex === 0 || dayIndex === 6;
+
+  const aliases: Record<string, number> = {
+    sunday: 0, sun: 0,
+    monday: 1, mon: 1,
+    tuesday: 2, tue: 2, tues: 2,
+    wednesday: 3, wed: 3,
+    thursday: 4, thu: 4, thur: 4, thurs: 4,
+    friday: 5, fri: 5,
+    saturday: 6, sat: 6,
+  };
+
+  const rangeMatch = text.match(/(sunday|sun|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat)\s*-\s*(sunday|sun|monday|mon|tuesday|tue|tues|wednesday|wed|thursday|thu|thur|thurs|friday|fri|saturday|sat)/);
+  if (rangeMatch) {
+    const start = aliases[rangeMatch[1]];
+    const end = aliases[rangeMatch[2]];
+    if (start <= end) return dayIndex >= start && dayIndex <= end;
+    return dayIndex >= start || dayIndex <= end;
+  }
+
+  return new RegExp(`\\b(${dayName}|${shortName})\\b`).test(text);
+}
+
+function parseScheduleDeparture(timeText: string, period: 'Morning' | 'Afternoon', baseDate: Date) {
+  const normalized = normaliseScheduleText(timeText);
+  const firstPart = normalized.split('-')[0]?.trim() ?? normalized;
+  const match = firstPart.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] ?? 0);
+  let meridiem = match[3]?.toLowerCase();
+
+  if (!meridiem) meridiem = period === 'Afternoon' ? 'pm' : 'am';
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+  if (meridiem === 'pm' && hour !== 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+
+  const departure = new Date(baseDate);
+  departure.setHours(hour, minute, 0, 0);
+  return departure;
+}
+
+function buildUpcomingDepartures(
+  nowMs: number,
+  schedules: ReturnType<typeof useTransit>['schedules'],
+  routes: ReturnType<typeof useTransit>['routes'],
+) {
+  const now = new Date(nowMs);
+  const maxMs = DEPARTURE_ALERT_WINDOW_MINUTES * 60_000;
+
+  return schedules.flatMap<UpcomingDeparture>((schedule) => {
+    const route = routes.find((item) => item.id === schedule.routeId);
+    if (!route || !route.available || !scheduleRunsOnDay(schedule.days, now)) return [];
+
+    const departure = parseScheduleDeparture(schedule.time, schedule.period, now);
+    if (!departure) return [];
+    const diffMs = departure.getTime() - nowMs;
+    if (diffMs < -60_000 || diffMs > maxMs) return [];
+
+    return [{
+      scheduleId: schedule.id,
+      routeTitle: route.title,
+      origin: route.origin,
+      destination: route.destination,
+      departureAt: departure.getTime(),
+      minutesUntil: Math.max(0, Math.ceil(diffMs / 60_000)),
+    }];
+  }).sort((a, b) => a.departureAt - b.departureAt);
+}
+
+function departureAlertText(item: UpcomingDeparture) {
+  const direction = `${item.origin} to ${item.destination}`;
+  if (item.minutesUntil <= 0) return `Datsco ${direction} is departing now.`;
+  if (item.minutesUntil === 1) return `Datsco ${direction} will depart in 1 minute.`;
+  return `Datsco ${direction} will depart in ${item.minutesUntil} minutes.`;
+}
 function formatGuidanceDuration(durationSeconds: number | null) {
   if (durationSeconds == null) return 'ETA unavailable';
   const minutes = Math.max(1, Math.round(durationSeconds / 60));
@@ -296,7 +400,7 @@ export const MapCard: React.FC<{
   const [mapStyleMenuOpen, setMapStyleMenuOpen] = useState(false);
   const [liveEta, setLiveEta] = useState<LiveEtaState>({ tripId: null, distanceMeters: null, etaSeconds: null, status: 'idle' });
   const [now, setNow] = useState(() => Date.now());
-  const { terminals, routes, accounts, activeTrips } = useTransit();
+  const { terminals, routes, schedules, accounts, activeTrips } = useTransit();
   const guidedTerminal = terminals.find((terminal) => terminal.id === guidedTerminalId) ?? null;
   const [guidanceRoute, setGuidanceRoute] = useState<GuidanceRouteState>({ points: [], distanceMeters: null, durationSeconds: null, status: 'idle' });
   const [previewRoadPoints, setPreviewRoadPoints] = useState<[number, number][]>([]);
@@ -316,6 +420,7 @@ export const MapCard: React.FC<{
   const selectedDestination = displayedRoute?.destination ?? 'destination terminal';
   const staleLiveTrips = activeTrips.filter((trip) => isTripLocationStale(trip, now));
   const currentMapStyle = MAP_STYLES[mapStyle];
+  const upcomingDepartures = buildUpcomingDepartures(now, schedules, routes);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 15_000);
@@ -534,6 +639,33 @@ export const MapCard: React.FC<{
         {onRequestLocation && <button type="button" onClick={onRequestLocation} className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-white/95 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 shadow-sm backdrop-blur transition hover:bg-blue-50"><LocateFixed size={12} /> {userLocation ? 'Refresh my GPS' : 'Show my GPS'}</button>}
       </div>
 
+      {upcomingDepartures.length > 0 && (
+        <div className="absolute left-3 right-3 top-14 z-30 overflow-hidden rounded-xl border border-blue-200 bg-white/95 shadow-md backdrop-blur" role="status" aria-live="polite">
+          <div className="flex min-h-9 items-center">
+            <div className="relative z-10 flex h-9 shrink-0 items-center gap-1.5 bg-blue-600 px-2.5 text-[10px] font-black uppercase tracking-wide text-white shadow-sm">
+              <BellRing size={12} /> Departure
+            </div>
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <div className="datscogo-departure-marquee flex w-max items-center whitespace-nowrap py-2 text-[10px] font-bold text-slate-700">
+                {upcomingDepartures.map((item, index) => (
+                  <React.Fragment key={`${item.scheduleId}-${item.departureAt}`}>
+                    {index > 0 && <span className="mx-5 text-blue-300">•</span>}
+                    <span>{departureAlertText(item)}</span>
+                  </React.Fragment>
+                ))}
+                <span className="mx-5 text-blue-300">•</span>
+                {upcomingDepartures.map((item, index) => (
+                  <React.Fragment key={`repeat-${item.scheduleId}-${item.departureAt}`}>
+                    {index > 0 && <span className="mx-5 text-blue-300">•</span>}
+                    <span>{departureAlertText(item)}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="absolute right-3 top-3 z-40">
         <button type="button" onClick={() => setMapStyleMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 shadow-sm backdrop-blur transition hover:bg-slate-50" aria-expanded={mapStyleMenuOpen} aria-label="Choose map style">
           <Layers size={12} /> {currentMapStyle.label}
@@ -550,7 +682,7 @@ export const MapCard: React.FC<{
       </div>
 
       {guidedTerminal && (
-        <div className="absolute left-3 right-3 top-14 z-40 rounded-2xl border border-blue-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:left-auto sm:right-3 sm:w-[330px]">
+        <div className={`absolute left-3 right-3 ${upcomingDepartures.length > 0 ? 'top-24' : 'top-14'} z-40 rounded-2xl border border-blue-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:left-auto sm:right-3 sm:w-[330px]`}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wide text-blue-600"><Navigation size={12} /> In-app guidance</div>
@@ -574,7 +706,7 @@ export const MapCard: React.FC<{
       )}
 
       {staleLiveTrips.length > 0 && (
-        <div className="absolute left-3 top-20 z-30 sm:top-12 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50/95 px-2.5 py-2 text-[10px] font-bold text-amber-800 shadow-sm backdrop-blur" role="status">
+        <div className={`absolute left-3 ${upcomingDepartures.length > 0 ? 'top-28' : 'top-20 sm:top-12'} z-30 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50/95 px-2.5 py-2 text-[10px] font-bold text-amber-800 shadow-sm backdrop-blur`} role="status">
           <AlertTriangle size={13} className="shrink-0" />
           <span>{staleLiveTrips.length === 1 ? 'Live location delayed' : `${staleLiveTrips.length} live locations delayed`} · last update {formatLocationAge(staleLiveTrips[0].lastUpdated, now)}</span>
         </div>
