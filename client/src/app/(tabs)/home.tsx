@@ -19,6 +19,7 @@ import { LocationPermissionPrompt } from '../../components/Common/LocationPermis
 type PassengerTab = 'datsco' | 'schedule' | 'terminal';
 type PassengerScreen = 'home' | 'datsco-routes' | 'schedule' | 'terminal';
 type DeviceLocation = { latitude: number; longitude: number };
+const ANNOUNCEMENT_SEEN_KEY = 'datscogo-seen-announcements-v1';
 
 export default function HomeTabScreen() {
   const { currentUser, isReady, login, logout, announcements, schedules, routes, terminals, contact } = useTransit();
@@ -65,6 +66,25 @@ export default function HomeTabScreen() {
     () => announcements.filter((announcement) => announcement.active).sort((a, b) => b.createdAt - a.createdAt),
     [announcements],
   );
+
+  // Automatically show newly published active announcements once per passenger device.
+  // The notification bell still lets passengers reopen all currently active notices.
+  useEffect(() => {
+    if (!isReady || workspace !== 'passenger' || activeAnnouncements.length === 0) return;
+    let seen = new Set<string>();
+    try {
+      const saved = JSON.parse(localStorage.getItem(ANNOUNCEMENT_SEEN_KEY) || '[]');
+      if (Array.isArray(saved)) seen = new Set(saved.filter((item): item is string => typeof item === 'string'));
+    } catch {
+      seen = new Set();
+    }
+
+    const unseenIds = activeAnnouncements.map((item) => item.id).filter((id) => !seen.has(id));
+    if (unseenIds.length === 0) return;
+    setShowNotificationModal(true);
+    unseenIds.forEach((id) => seen.add(id));
+    localStorage.setItem(ANNOUNCEMENT_SEEN_KEY, JSON.stringify(Array.from(seen).slice(-100)));
+  }, [activeAnnouncements, isReady, workspace]);
 
   const destinationOptions = useMemo<SearchDestination[]>(() => {
     type DestinationDraft = Omit<SearchDestination, 'subtitle'> & { routeTitles: string[] };
@@ -424,7 +444,14 @@ export default function HomeTabScreen() {
               <div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-wider text-blue-600">From DatscoGo admin</p><h3 className="mt-1 text-base font-bold text-slate-900">Notifications</h3></div><button onClick={() => setShowNotificationModal(false)} className="font-bold text-slate-400 hover:text-slate-600">✕</button></div>
               <div className="space-y-3">
                 {activeAnnouncements.map((announcement) => (
-                  <article key={announcement.id} className="rounded-2xl border border-blue-100 bg-blue-50 p-4"><div className="text-xs font-black text-[#1D4ED8]">{announcement.title}</div><div className="mt-1 text-xs leading-5 text-slate-600">{announcement.message}</div><div className="mt-2 text-[10px] font-medium text-slate-400">{new Date(announcement.createdAt).toLocaleString()}</div></article>
+                  <article key={announcement.id} className="overflow-hidden rounded-2xl border border-blue-100 bg-blue-50">
+                    {announcement.imageUrl && <img src={announcement.imageUrl} alt={announcement.title || 'DatscoGo announcement'} className="max-h-[55dvh] w-full bg-white object-contain" />}
+                    <div className="p-4">
+                      {announcement.title && <div className="text-sm font-black text-[#1D4ED8]">{announcement.title}</div>}
+                      {announcement.message && <div className={`${announcement.title ? 'mt-1' : ''} text-xs leading-5 text-slate-600`}>{announcement.message}</div>}
+                      <div className="mt-2 text-[10px] font-medium text-slate-400">{new Date(announcement.createdAt).toLocaleString()}</div>
+                    </div>
+                  </article>
                 ))}
                 {activeAnnouncements.length === 0 && <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-400">No active announcements from the administrator.</div>}
               </div>

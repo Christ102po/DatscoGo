@@ -100,6 +100,7 @@ export interface Announcement {
   id: string;
   title: string;
   message: string;
+  imageUrl?: string;
   createdAt: number;
   active: boolean;
 }
@@ -145,7 +146,7 @@ interface TransitContextValue extends TransitStore {
   updateTerminal: (terminalId: string, changes: Partial<Omit<Terminal, 'id'>>) => void;
   deleteTerminal: (terminalId: string) => { ok: boolean; affectedRoutes: string[] };
   updateContact: (changes: ContactDetails) => void;
-  addAnnouncement: (input: { title: string; message: string }) => void;
+  addAnnouncement: (input: { title: string; message: string; imageDataUrl?: string }) => Promise<{ ok: boolean; error?: string }>;
   deleteAnnouncement: (announcementId: string) => void;
   toggleAnnouncement: (announcementId: string) => void;
   startTrip: (driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => void;
@@ -584,13 +585,37 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     replaceStore((current) => ({ ...current, contact: changes }), true);
   }, [replaceStore]);
 
-  const addAnnouncement = useCallback(({ title, message }: { title: string; message: string }) => {
-    const announcement: Announcement = { id: createId('announcement'), title: title.trim(), message: message.trim(), createdAt: Date.now(), active: true };
+  const addAnnouncement = useCallback(async ({ title, message, imageDataUrl }: { title: string; message: string; imageDataUrl?: string }) => {
+    const cleanTitle = title.trim();
+    const cleanMessage = message.trim();
+    if (!cleanTitle && !cleanMessage && !imageDataUrl) return { ok: false, error: 'Add a title, message, or image before publishing.' };
+
+    const id = createId('announcement');
+    let imageUrl: string | undefined;
+
+    if (imageDataUrl) {
+      try {
+        const response = await fetch(`/api/announcement-images/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl: imageDataUrl }),
+        });
+        const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+        if (!response.ok) return { ok: false, error: payload.error || 'Unable to upload the announcement image.' };
+        imageUrl = `/api/announcement-images/${encodeURIComponent(id)}`;
+      } catch {
+        return { ok: false, error: 'Unable to reach the server to upload the announcement image.' };
+      }
+    }
+
+    const announcement: Announcement = { id, title: cleanTitle, message: cleanMessage, imageUrl, createdAt: Date.now(), active: true };
     replaceStore((current) => ({ ...current, announcements: [announcement, ...current.announcements] }), true);
+    return { ok: true };
   }, [replaceStore]);
 
   const deleteAnnouncement = useCallback((announcementId: string) => {
     replaceStore((current) => ({ ...current, announcements: current.announcements.filter((announcement) => announcement.id !== announcementId) }), true);
+    void fetch(`/api/announcement-images/${encodeURIComponent(announcementId)}`, { method: 'DELETE' }).catch(() => undefined);
   }, [replaceStore]);
 
   const toggleAnnouncement = useCallback((announcementId: string) => {

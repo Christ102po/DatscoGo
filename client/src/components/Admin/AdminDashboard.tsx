@@ -6,6 +6,7 @@ import {
   Check,
   CircleAlert,
   ClipboardList,
+  ImagePlus,
   KeyRound,
   LogOut,
   MapPinned,
@@ -332,24 +333,71 @@ function TerminalManager({ onNotice }: { onNotice: (message: string, error?: boo
 
 function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?: boolean) => void }) {
   const { announcements, addAnnouncement, deleteAnnouncement, toggleAnnouncement } = useTransit();
-  const [draft, setDraft] = useState({ title: '', message: '' });
+  const [draft, setDraft] = useState({ title: '', message: '', imageDataUrl: '' });
+  const [isPublishing, setIsPublishing] = useState(false);
 
-  const publish = (event: React.FormEvent) => {
+  const chooseImage = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) return onNotice('Choose a PNG, JPG, JPEG, or WEBP image.', true);
+    if (file.size > 8 * 1024 * 1024) return onNotice('Choose an image smaller than 8 MB.', true);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const source = String(reader.result || '');
+      const image = new Image();
+      image.onload = () => {
+        const maxSide = 1600;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext('2d');
+        if (!context) return onNotice('Unable to process this image.', true);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.82);
+        setDraft((current) => ({ ...current, imageDataUrl: compressed }));
+      };
+      image.onerror = () => onNotice('Unable to read this image.', true);
+      image.src = source;
+    };
+    reader.onerror = () => onNotice('Unable to read this image.', true);
+    reader.readAsDataURL(file);
+  };
+
+  const publish = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!draft.title.trim() || !draft.message.trim()) return onNotice('Enter both an announcement title and message.', true);
-    addAnnouncement(draft);
-    setDraft({ title: '', message: '' });
-    onNotice('Announcement published to passenger notifications.');
+    if (!draft.title.trim() && !draft.message.trim() && !draft.imageDataUrl) return onNotice('Add a title, message, or picture before publishing.', true);
+    setIsPublishing(true);
+    const result = await addAnnouncement({ title: draft.title, message: draft.message, imageDataUrl: draft.imageDataUrl || undefined });
+    setIsPublishing(false);
+    if (!result.ok) return onNotice(result.error ?? 'Unable to publish the announcement.', true);
+    setDraft({ title: '', message: '', imageDataUrl: '' });
+    onNotice('Announcement published and will automatically pop up for passengers.');
   };
 
   return (
     <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
       <form onSubmit={publish} className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-2"><span className="rounded-xl bg-blue-50 p-2 text-blue-600"><Megaphone size={19} /></span><div><h2 className="font-black">Publish announcement</h2><p className="text-xs text-slate-500">Passengers will see active announcements from the notification bell.</p></div></div>
+        <div className="flex items-center gap-2"><span className="rounded-xl bg-blue-50 p-2 text-blue-600"><Megaphone size={19} /></span><div><h2 className="font-black">Publish announcement</h2><p className="text-xs text-slate-500">Use text, a picture, or both. New active announcements automatically pop up for passengers.</p></div></div>
         <div className="mt-4 space-y-3">
-          <input required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Announcement title" className={inputClass} />
-          <textarea required value={draft.message} onChange={(event) => setDraft({ ...draft, message: event.target.value })} placeholder="Write the service announcement..." rows={5} className={`${inputClass} resize-y`} />
-          <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><BellRing size={17} />Publish announcement</button>
+          <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Announcement title (optional)" className={inputClass} />
+          <textarea value={draft.message} onChange={(event) => setDraft({ ...draft, message: event.target.value })} placeholder="Write an announcement (optional if a picture is attached)..." rows={5} className={`${inputClass} resize-y`} />
+
+          {draft.imageDataUrl ? (
+            <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <img src={draft.imageDataUrl} alt="Announcement preview" className="max-h-64 w-full object-contain" />
+              <button type="button" onClick={() => setDraft({ ...draft, imageDataUrl: '' })} className="absolute right-2 top-2 rounded-full bg-white/95 p-2 text-slate-600 shadow hover:text-red-600" aria-label="Remove attached picture"><X size={16} /></button>
+            </div>
+          ) : null}
+
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-blue-200 bg-blue-50 px-3 py-3 text-sm font-bold text-blue-700 transition hover:bg-blue-100">
+            <ImagePlus size={18} />{draft.imageDataUrl ? 'Change picture' : 'Attach picture (optional)'}
+            <input type="file" accept="image/png,image/jpeg,image/webp" onChange={chooseImage} className="hidden" />
+          </label>
+
+          <button disabled={isPublishing} className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"><BellRing size={17} />{isPublishing ? 'Publishing…' : 'Publish announcement'}</button>
         </div>
       </form>
 
@@ -357,10 +405,11 @@ function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?:
         <div className="flex items-center justify-between gap-3"><div><h2 className="font-black">Published announcements</h2><p className="mt-1 text-xs text-slate-500">Turn an announcement off without deleting it, or remove it permanently.</p></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">{announcements.filter((item) => item.active).length} active</span></div>
         <div className="mt-4 space-y-3">
           {announcements.map((announcement) => (
-            <article key={announcement.id} className={`rounded-2xl border p-4 ${announcement.active ? 'border-blue-100 bg-blue-50/40' : 'border-slate-200 bg-slate-50'}`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0 flex-1"><p className="text-sm font-black text-slate-900">{announcement.title}</p><p className="mt-1 text-xs leading-5 text-slate-600">{announcement.message}</p><p className="mt-2 text-[10px] font-semibold text-slate-400">{new Date(announcement.createdAt).toLocaleString()}</p></div>
-                <div className="flex gap-2"><button type="button" onClick={() => toggleAnnouncement(announcement.id)} className={`rounded-xl px-3 py-2 text-xs font-bold ${announcement.active ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{announcement.active ? 'Active' : 'Hidden'}</button><button type="button" onClick={() => deleteAnnouncement(announcement.id)} className="rounded-xl border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label={`Delete ${announcement.title}`}><Trash2 size={17} /></button></div>
+            <article key={announcement.id} className={`overflow-hidden rounded-2xl border ${announcement.active ? 'border-blue-100 bg-blue-50/40' : 'border-slate-200 bg-slate-50'}`}>
+              {announcement.imageUrl && <img src={announcement.imageUrl} alt={announcement.title || 'Announcement'} className="max-h-72 w-full bg-white object-contain" />}
+              <div className="flex flex-wrap items-start justify-between gap-3 p-4">
+                <div className="min-w-0 flex-1">{announcement.title && <p className="text-sm font-black text-slate-900">{announcement.title}</p>}{announcement.message && <p className={`${announcement.title ? 'mt-1' : ''} text-xs leading-5 text-slate-600`}>{announcement.message}</p>}<p className="mt-2 text-[10px] font-semibold text-slate-400">{new Date(announcement.createdAt).toLocaleString()}</p></div>
+                <div className="flex gap-2"><button type="button" onClick={() => toggleAnnouncement(announcement.id)} className={`rounded-xl px-3 py-2 text-xs font-bold ${announcement.active ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{announcement.active ? 'Active' : 'Hidden'}</button><button type="button" onClick={() => deleteAnnouncement(announcement.id)} className="rounded-xl border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label={`Delete ${announcement.title || 'announcement'}`}><Trash2 size={17} /></button></div>
               </div>
             </article>
           ))}
@@ -370,7 +419,6 @@ function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?:
     </div>
   );
 }
-
 
 function TripRecordsPanel({
   accounts,
@@ -640,14 +688,14 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
           <div className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
               {[
-                [Route, 'Available routes', `${routes.filter((item) => item.available).length} / ${routes.length}`],
-                [CalendarClock, 'Schedule entries', schedules.length],
-                [MapPinned, 'Map terminals', terminals.length],
-                [UsersRound, 'Driver accounts', drivers.length],
-                [Megaphone, 'Active notices', announcements.filter((item) => item.active).length],
-              ].map(([Icon, label, value]) => {
+                [Route, 'Available routes', `${routes.filter((item) => item.available).length} / ${routes.length}`, 'routes'],
+                [CalendarClock, 'Schedule entries', schedules.length, 'schedules'],
+                [MapPinned, 'Map terminals', terminals.length, 'terminals'],
+                [UsersRound, 'Driver accounts', drivers.length, 'drivers'],
+                [Megaphone, 'Active notices', announcements.filter((item) => item.active).length, 'announcements'],
+              ].map(([Icon, label, value, target]) => {
                 const MetricIcon = Icon as typeof Route;
-                return <article key={label as string} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><span className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600"><MetricIcon size={20} /></span><p className="mt-4 text-2xl font-black">{value as string | number}</p><p className="mt-1 text-xs font-bold uppercase tracking-[.1em] text-slate-500">{label as string}</p></article>;
+                return <button type="button" key={label as string} onClick={() => setSection(target as Section)} className="group rounded-3xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-200"><div className="flex items-start justify-between gap-3"><span className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600 transition group-hover:bg-blue-600 group-hover:text-white"><MetricIcon size={20} /></span><span className="text-lg font-black text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-blue-600">›</span></div><p className="mt-4 text-2xl font-black">{value as string | number}</p><p className="mt-1 text-xs font-bold uppercase tracking-[.1em] text-slate-500">{label as string}</p></button>;
               })}
             </div>
             <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">

@@ -99,6 +99,15 @@ async function startServer() {
   `;
 
   await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_announcement_images (
+      announcement_id TEXT PRIMARY KEY,
+      content_type TEXT NOT NULL,
+      image_data BYTEA NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
     CREATE TABLE IF NOT EXISTS datscogo_trip_history (
       trip_id TEXT PRIMARY KEY,
       driver_id TEXT NOT NULL,
@@ -149,7 +158,7 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "6mb" }));
 
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -246,6 +255,64 @@ async function startServer() {
         ok: false,
         error: "Unable to save shared transit data.",
       });
+    }
+  });
+
+  // --------------------------------------------------
+  // ANNOUNCEMENT IMAGES
+  // --------------------------------------------------
+
+  app.put('/api/announcement-images/:announcementId', async (req, res) => {
+    const announcementId = String(req.params.announcementId || '').trim();
+    const dataUrl = validObject(req.body) && typeof req.body.dataUrl === 'string' ? req.body.dataUrl : '';
+    const match = /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!announcementId || !match) return res.status(400).json({ ok: false, error: 'Use a PNG, JPG, JPEG, or WEBP image.' });
+
+    try {
+      const imageData = Buffer.from(match[2], 'base64');
+      if (imageData.length === 0 || imageData.length > 3 * 1024 * 1024) {
+        return res.status(413).json({ ok: false, error: 'Announcement images must be 3 MB or smaller after processing.' });
+      }
+      await sql`
+        INSERT INTO datscogo_announcement_images (announcement_id, content_type, image_data, updated_at)
+        VALUES (${announcementId}, ${match[1]}, ${imageData}, NOW())
+        ON CONFLICT (announcement_id) DO UPDATE SET
+          content_type = EXCLUDED.content_type,
+          image_data = EXCLUDED.image_data,
+          updated_at = NOW()
+      `;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Announcement image upload failed:', error);
+      res.status(500).json({ ok: false, error: 'Unable to save the announcement image.' });
+    }
+  });
+
+  app.get('/api/announcement-images/:announcementId', async (req, res) => {
+    try {
+      const rows = await sql`
+        SELECT content_type, image_data
+        FROM datscogo_announcement_images
+        WHERE announcement_id = ${String(req.params.announcementId || '')}
+        LIMIT 1
+      `;
+      if (!rows[0]) return res.status(404).end();
+      res.setHeader('Content-Type', rows[0].content_type);
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.send(rows[0].image_data);
+    } catch (error) {
+      console.error('Announcement image read failed:', error);
+      res.status(500).end();
+    }
+  });
+
+  app.delete('/api/announcement-images/:announcementId', async (req, res) => {
+    try {
+      await sql`DELETE FROM datscogo_announcement_images WHERE announcement_id = ${String(req.params.announcementId || '')}`;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Announcement image delete failed:', error);
+      res.status(500).json({ ok: false, error: 'Unable to remove the announcement image.' });
     }
   });
 
