@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Filter, LocateFixed, Navigation, X } from 'lucide-react';
+import { AlertTriangle, Filter, Layers, LocateFixed, Navigation, X } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -123,6 +123,44 @@ const TerminalMarker: React.FC<{ terminal: { id: string; name: string; details: 
   </Marker>;
 };
 
+
+type MapStyle = 'street' | 'satellite' | 'terrain' | 'hybrid';
+
+const MAP_STYLES: Record<MapStyle, { label: string; url: string; attribution: string; maxZoom: number; labelsUrl?: string }> = {
+  street: {
+    label: 'Street',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  },
+  satellite: {
+    label: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri',
+    maxZoom: 19,
+  },
+  terrain: {
+    label: 'Terrain',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: 'Map data &copy; OpenStreetMap contributors, SRTM | Map style &copy; OpenTopoMap',
+    maxZoom: 17,
+  },
+  hybrid: {
+    label: 'Hybrid',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    labelsUrl: 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png',
+    attribution: 'Tiles &copy; Esri | Labels &copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 19,
+  },
+};
+
+interface LiveEtaState {
+  tripId: string | null;
+  distanceMeters: number | null;
+  etaSeconds: number | null;
+  status: 'idle' | 'loading' | 'ready' | 'stopped' | 'error';
+}
+
 interface GuidanceRouteState {
   points: [number, number][];
   distanceMeters: number | null;
@@ -214,6 +252,9 @@ export const MapCard: React.FC<{
   const [tilesLoaded, setTilesLoaded] = useState(false);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [showLiveOnly, setShowLiveOnly] = useState(false);
+  const [mapStyle, setMapStyle] = useState<MapStyle>('street');
+  const [mapStyleMenuOpen, setMapStyleMenuOpen] = useState(false);
+  const [liveEta, setLiveEta] = useState<LiveEtaState>({ tripId: null, distanceMeters: null, etaSeconds: null, status: 'idle' });
   const [now, setNow] = useState(() => Date.now());
   const { terminals, routes, accounts, activeTrips } = useTransit();
   const guidedTerminal = terminals.find((terminal) => terminal.id === guidedTerminalId) ?? null;
@@ -234,6 +275,7 @@ export const MapCard: React.FC<{
   const selectedDriver = selectedTrip ? accounts.find((account) => account.id === selectedTrip.driverId) : null;
   const selectedDestination = displayedRoute?.destination ?? 'destination terminal';
   const staleLiveTrips = activeTrips.filter((trip) => isTripLocationStale(trip, now));
+  const currentMapStyle = MAP_STYLES[mapStyle];
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 15_000);
@@ -294,6 +336,51 @@ export const MapCard: React.FC<{
   }, [previewRoute?.id]);
 
   useEffect(() => {
+    if (!selectedTrip || selectedTrip.status !== 'departed') {
+      setLiveEta({ tripId: null, distanceMeters: null, etaSeconds: null, status: 'idle' });
+      return;
+    }
+
+    const route = routes.find((item) => item.id === selectedTrip.routeId);
+    if (!route) {
+      setLiveEta({ tripId: selectedTrip.id, distanceMeters: null, etaSeconds: null, status: 'error' });
+      return;
+    }
+
+    const destinationTerminal = terminals.find((terminal) => terminal.id === route.destinationTerminalId);
+    const fallbackDestination = route.coordinates[route.coordinates.length - 1];
+    const destination = destinationTerminal
+      ? [destinationTerminal.latitude, destinationTerminal.longitude] as [number, number]
+      : fallbackDestination;
+    if (!destination) {
+      setLiveEta({ tripId: selectedTrip.id, distanceMeters: null, etaSeconds: null, status: 'error' });
+      return;
+    }
+
+    const controller = new AbortController();
+    setLiveEta({ tripId: selectedTrip.id, distanceMeters: null, etaSeconds: null, status: 'loading' });
+
+    fetchRoadRoute(
+      [[selectedTrip.latitude, selectedTrip.longitude], destination],
+      { signal: controller.signal, alternatives: false, prefer: 'shortest' },
+    ).then((result) => {
+      const speedKph = Number(selectedTrip.speedKph ?? 0);
+      if (!Number.isFinite(speedKph) || speedKph < 2) {
+        setLiveEta({ tripId: selectedTrip.id, distanceMeters: result.distanceMeters, etaSeconds: null, status: 'stopped' });
+        return;
+      }
+      const etaSeconds = result.distanceMeters == null
+        ? null
+        : result.distanceMeters / (speedKph / 3.6);
+      setLiveEta({ tripId: selectedTrip.id, distanceMeters: result.distanceMeters, etaSeconds, status: etaSeconds == null ? 'error' : 'ready' });
+    }).catch(() => {
+      if (!controller.signal.aborted) setLiveEta({ tripId: selectedTrip.id, distanceMeters: null, etaSeconds: null, status: 'error' });
+    });
+
+    return () => controller.abort();
+  }, [selectedTrip?.id, selectedTrip?.latitude, selectedTrip?.longitude, selectedTrip?.speedKph, selectedTrip?.routeId, routes, terminals]);
+
+  useEffect(() => {
     if (selectedTrip && selectedTrip.status !== 'departed') setSelectedTripId(null);
   }, [selectedTrip]);
 
@@ -311,11 +398,21 @@ export const MapCard: React.FC<{
           <MapSizeInvalidator />
           {userLocation && <UserLocationViewport userLocation={userLocation} />}
           <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            maxZoom={18}
-            attribution="&copy; OpenStreetMap contributors"
-            eventHandlers={{ load: () => setTilesLoaded(true) }}
+            key={`base-${mapStyle}`}
+            url={currentMapStyle.url}
+            maxZoom={currentMapStyle.maxZoom}
+            attribution={currentMapStyle.attribution}
+            eventHandlers={{ loading: () => setTilesLoaded(false), load: () => setTilesLoaded(true) }}
           />
+          {currentMapStyle.labelsUrl && (
+            <TileLayer
+              key={`labels-${mapStyle}`}
+              url={currentMapStyle.labelsUrl}
+              maxZoom={currentMapStyle.maxZoom}
+              attribution={currentMapStyle.attribution}
+              pane="overlayPane"
+            />
+          )}
           {guidedTerminal && userLocation && (
             <>
               <GuidanceViewport userLocation={userLocation} terminal={guidedTerminal} routePoints={guidanceRoute.points} />
@@ -358,7 +455,20 @@ export const MapCard: React.FC<{
             const route = routes.find((item) => item.id === trip.routeId);
             const isLive = trip.status === 'departed';
             return <Marker key={trip.id} position={[trip.latitude, trip.longitude]} icon={makeVehicleIcon(trip.status)} eventHandlers={{ click: () => setSelectedTripId(isLive ? trip.id : null) }}>
-              <Popup><div className={`text-xs font-bold ${isLive ? 'text-emerald-700' : 'text-slate-700'}`}>{driver?.displayName ?? 'DatscoGo vehicle'} · {isLive ? 'Live' : 'Arrived'}</div><div className="mt-1 text-[10px] text-slate-500">{route?.title ?? 'Route unavailable'} · Updated {new Date(trip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>{isLive && <div className="mt-2 text-[10px] font-semibold text-blue-600">Select this vehicle to show its active route.</div>}{!isLive && <div className="mt-2 text-[10px] font-semibold text-slate-600">Vehicle is waiting at the destination terminal.</div>}</Popup>
+              <Popup>
+                <div className={`text-xs font-bold ${isLive ? 'text-emerald-700' : 'text-slate-700'}`}>{driver?.displayName ?? 'DatscoGo vehicle'} · {isLive ? 'Live' : 'Arrived'}</div>
+                <div className="mt-1 text-[10px] text-slate-500">{route?.title ?? 'Route unavailable'} · Updated {new Date(trip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                {isLive && (
+                  <div className="mt-2 rounded-lg bg-slate-50 p-2 text-[10px] leading-4 text-slate-700">
+                    <div className="flex items-center justify-between gap-3"><span className="font-semibold text-slate-500">Current speed</span><span className="font-black text-slate-900">{Number(trip.speedKph ?? 0).toFixed(1)} km/h</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="font-semibold text-slate-500">To {route?.destination ?? 'destination'}</span><span className="font-black text-slate-900">{liveEta.tripId === trip.id && liveEta.distanceMeters != null ? formatGuidanceDistance(liveEta.distanceMeters) : liveEta.tripId === trip.id && liveEta.status === 'loading' ? 'Calculating…' : '—'}</span></div>
+                    <div className="mt-0.5 flex items-center justify-between gap-3"><span className="font-semibold text-slate-500">Estimated arrival</span><span className="font-black text-blue-700">{liveEta.tripId !== trip.id ? 'Select vehicle' : liveEta.status === 'loading' ? 'Calculating…' : liveEta.status === 'stopped' ? 'Waiting for movement' : liveEta.status === 'ready' ? formatGuidanceDuration(liveEta.etaSeconds) : 'Unavailable'}</span></div>
+                    <div className="mt-1 text-[9px] text-slate-500">ETA uses the remaining driving-road distance and the Datsco's latest GPS speed.</div>
+                  </div>
+                )}
+                {isLive && <div className="mt-2 text-[10px] font-semibold text-blue-600">Select this vehicle to show its active route.</div>}
+                {!isLive && <div className="mt-2 text-[10px] font-semibold text-slate-600">Vehicle is waiting at the destination terminal.</div>}
+              </Popup>
             </Marker>;
           })}
         </MapContainer>
@@ -382,6 +492,21 @@ export const MapCard: React.FC<{
           <Filter size={12} /> Live only <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${showLiveOnly ? 'bg-white/20' : 'bg-emerald-100 text-emerald-700'}`}>{liveTripCount}</span>
         </button>
         {onRequestLocation && <button type="button" onClick={onRequestLocation} className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-white/95 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 shadow-sm backdrop-blur transition hover:bg-blue-50"><LocateFixed size={12} /> {userLocation ? 'Refresh my GPS' : 'Show my GPS'}</button>}
+      </div>
+
+      <div className="absolute right-3 top-3 z-40">
+        <button type="button" onClick={() => setMapStyleMenuOpen((open) => !open)} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 shadow-sm backdrop-blur transition hover:bg-slate-50" aria-expanded={mapStyleMenuOpen} aria-label="Choose map style">
+          <Layers size={12} /> {currentMapStyle.label}
+        </button>
+        {mapStyleMenuOpen && (
+          <div className="mt-1 w-32 overflow-hidden rounded-xl border border-slate-200 bg-white/98 p-1 shadow-lg backdrop-blur">
+            {(Object.keys(MAP_STYLES) as MapStyle[]).map((style) => (
+              <button key={style} type="button" onClick={() => { setMapStyle(style); setMapStyleMenuOpen(false); setTilesLoaded(false); }} className={`block w-full rounded-lg px-2.5 py-2 text-left text-[10px] font-bold transition ${mapStyle === style ? 'bg-blue-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}>
+                {MAP_STYLES[style].label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {guidedTerminal && (

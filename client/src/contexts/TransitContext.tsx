@@ -94,7 +94,9 @@ export interface ActiveTrip {
   safetyCheckStartedAt?: number;
   safetyCheckDeadlineAt?: number;
   safetyIncident?: SafetyIncident;
+  speedKph?: number;
 }
+
 
 export interface Announcement {
   id: string;
@@ -150,7 +152,7 @@ interface TransitContextValue extends TransitStore {
   deleteAnnouncement: (announcementId: string) => void;
   toggleAnnouncement: (announcementId: string) => void;
   startTrip: (driverId: string, routeId: string, location?: { latitude: number; longitude: number }) => void;
-  updateTripLocation: (driverId: string, location: { latitude: number; longitude: number }) => void;
+  updateTripLocation: (driverId: string, location: { latitude: number; longitude: number; speedKph?: number }) => void;
   cancelTripSafetyCheck: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
   reportTripIncident: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
   resolveTripIncident: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
@@ -648,10 +650,35 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     void publishTrip(nextTrip);
   }, [replaceStore]);
 
-  const updateTripLocation = useCallback((driverId: string, location: { latitude: number; longitude: number }) => {
+  const updateTripLocation = useCallback((driverId: string, location: { latitude: number; longitude: number; speedKph?: number }) => {
     const existing = storeRef.current.activeTrips.find((trip) => trip.driverId === driverId && trip.status === 'departed');
     if (!existing) return;
-    const nextTrip = { ...existing, ...location, lastUpdated: Date.now() };
+
+    const now = Date.now();
+    const elapsedSeconds = Math.max(0.5, (now - existing.lastUpdated) / 1000);
+    const toRadians = (value: number) => value * Math.PI / 180;
+    const earthRadiusMeters = 6_371_000;
+    const deltaLat = toRadians(location.latitude - existing.latitude);
+    const deltaLon = toRadians(location.longitude - existing.longitude);
+    const lat1 = toRadians(existing.latitude);
+    const lat2 = toRadians(location.latitude);
+    const a = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+    const movedMeters = 2 * earthRadiusMeters * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const derivedSpeedKph = (movedMeters / elapsedSeconds) * 3.6;
+    const rawSpeedKph = Number.isFinite(location.speedKph) ? Number(location.speedKph) : derivedSpeedKph;
+    const boundedSpeedKph = Math.max(0, Math.min(120, rawSpeedKph));
+    const previousSpeed = Number.isFinite(existing.speedKph) ? Number(existing.speedKph) : boundedSpeedKph;
+    const smoothedSpeedKph = boundedSpeedKph < 1 && movedMeters < 4
+      ? 0
+      : Math.round((previousSpeed * 0.35 + boundedSpeedKph * 0.65) * 10) / 10;
+
+    const nextTrip: ActiveTrip = {
+      ...existing,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      speedKph: smoothedSpeedKph,
+      lastUpdated: now,
+    };
     replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId && trip.status === 'departed' ? nextTrip : trip) }));
     void publishTrip(nextTrip);
   }, [replaceStore]);

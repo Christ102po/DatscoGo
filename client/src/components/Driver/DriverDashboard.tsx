@@ -64,7 +64,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
     setIsLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude, speedKph: typeof position.coords.speed === 'number' && position.coords.speed >= 0 ? position.coords.speed * 3.6 : undefined };
         setDeviceLocation(location);
         setLocationConsent(true);
         setShowLocationPermission(false);
@@ -149,7 +149,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({ onLogout }) =>
     lastPublishedLocationAt.current = 0;
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+        const location = { latitude: position.coords.latitude, longitude: position.coords.longitude, speedKph: typeof position.coords.speed === 'number' && position.coords.speed >= 0 ? position.coords.speed * 3.6 : undefined };
         setDeviceLocation(location);
 
         const now = Date.now();
