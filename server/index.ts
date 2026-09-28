@@ -297,6 +297,26 @@ async function startServer() {
           updated_at = NOW()
       `;
 
+      // Keep live vehicle markers consistent with driver accounts. If a driver
+      // account is removed, any shared live trip for that driver is removed too.
+      const activeDriverIds = req.body
+        .filter((account: unknown) => validObject(account) && account.role === "driver" && account.active !== false)
+        .map((account: JsonObject) => String(account.id || "").trim())
+        .filter(Boolean);
+
+      const liveDriverRows = await sql`SELECT driver_id FROM datscogo_live_trips`;
+      const activeDriverIdSet = new Set(activeDriverIds);
+      const removedDriverIds = liveDriverRows
+        .map((row) => String(row.driver_id || "").trim())
+        .filter((driverId) => driverId && !activeDriverIdSet.has(driverId));
+
+      for (const removedDriverId of removedDriverIds) {
+        await sql`
+          DELETE FROM datscogo_live_trips
+          WHERE driver_id = ${removedDriverId}
+        `;
+      }
+
       res.json({ ok: true });
     } catch (error) {
       console.error("Write accounts failed:", error);
@@ -334,6 +354,24 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/trips/:driverId", async (req, res) => {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) {
+      return res.status(400).json({ ok: false, error: "Invalid driver ID." });
+    }
+
+    try {
+      await sql`
+        DELETE FROM datscogo_live_trips
+        WHERE driver_id = ${driverId}
+      `;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error("Delete live trip failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to remove the driver's live location." });
+    }
+  });
+
   app.put("/api/trips/:driverId", async (req, res) => {
     const driverId = String(req.params.driverId || "").trim();
     const incomingTrip = req.body;
@@ -347,6 +385,26 @@ async function startServer() {
     }
 
     try {
+      // Reject location updates from deleted/disabled driver accounts so a
+      // stale driver session cannot recreate a marker after admin deletion.
+      const accountRows = await sql`
+        SELECT state_value
+        FROM datscogo_app_state
+        WHERE state_key = 'accounts'
+        LIMIT 1
+      `;
+      const accounts = accountRows[0]?.state_value;
+      const driverIsActive = Array.isArray(accounts) && accounts.some((account) =>
+        validObject(account) &&
+        String(account.id || "") === driverId &&
+        account.role === "driver" &&
+        account.active !== false
+      );
+
+      if (!driverIsActive) {
+        await sql`DELETE FROM datscogo_live_trips WHERE driver_id = ${driverId}`;
+        return res.status(403).json({ ok: false, error: "Driver account is no longer active." });
+      }
       const existingRows = await sql`
         SELECT trip_value
         FROM datscogo_live_trips

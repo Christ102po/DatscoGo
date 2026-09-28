@@ -293,6 +293,16 @@ async function publishTrip(trip: ActiveTrip) {
   }
 }
 
+async function deletePublishedTrip(driverId: string) {
+  try {
+    await fetch(`/api/trips/${encodeURIComponent(driverId)}`, {
+      method: 'DELETE',
+    });
+  } catch {
+    // The account update also performs server-side cleanup when the API is reachable.
+  }
+}
+
 async function publishSafetyAction(driverId: string, action: 'cancel' | 'report' | 'resolve') {
   const response = await fetch(`/api/trips/${encodeURIComponent(driverId)}/safety`, {
     method: 'PATCH',
@@ -486,6 +496,10 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
       accounts: current.accounts.filter((account) => account.id !== driverId || account.role !== 'driver'),
       activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
     }), false, true);
+
+    // Remove the driver's shared live trip immediately so the passenger map
+    // cannot restore the deleted driver's marker on the next server poll.
+    void deletePublishedTrip(driverId);
   }, [replaceStore]);
 
   const setAdminPassword = useCallback(async (currentPassword: string, newPassword: string) => {
