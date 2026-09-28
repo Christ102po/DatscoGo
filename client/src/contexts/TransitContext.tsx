@@ -135,6 +135,7 @@ interface TransitContextValue extends TransitStore {
   logout: () => void;
   createDriver: (input: { displayName: string; username: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
   deleteDriver: (driverId: string) => void;
+  removeLiveLocation: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
   setAdminPassword: (currentPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
   addRoute: (input: Omit<TransitRoute, 'id'>) => void;
   updateRoute: (routeId: string, changes: Partial<Omit<TransitRoute, 'id'>>) => void;
@@ -295,11 +296,14 @@ async function publishTrip(trip: ActiveTrip) {
 
 async function deletePublishedTrip(driverId: string) {
   try {
-    await fetch(`/api/trips/${encodeURIComponent(driverId)}`, {
+    const response = await fetch(`/api/trips/${encodeURIComponent(driverId)}`, {
       method: 'DELETE',
     });
+    const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+    if (!response.ok) return { ok: false, error: payload.error || 'Unable to remove the live location.' };
+    return { ok: true };
   } catch {
-    // The account update also performs server-side cleanup when the API is reachable.
+    return { ok: false, error: 'Unable to reach the server to remove the live location.' };
   }
 }
 
@@ -502,6 +506,18 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     void deletePublishedTrip(driverId);
   }, [replaceStore]);
 
+  const removeLiveLocation = useCallback(async (driverId: string) => {
+    const result = await deletePublishedTrip(driverId);
+    if (!result.ok) return result;
+
+    replaceStore((current) => ({
+      ...current,
+      activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
+    }), false, false);
+
+    return { ok: true };
+  }, [replaceStore]);
+
   const setAdminPassword = useCallback(async (currentPassword: string, newPassword: string) => {
     if (newPassword.length < 10) return { ok: false, error: 'Use at least 10 characters for the new password.' };
     const admin = store.accounts.find((account) => account.role === 'admin');
@@ -648,6 +664,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     logout,
     createDriver,
     deleteDriver,
+    removeLiveLocation,
     setAdminPassword,
     addRoute,
     updateRoute,
@@ -666,7 +683,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     reportTripIncident,
     resolveTripIncident,
     arriveTrip,
-  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
+  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, removeLiveLocation, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
 
   return <TransitContext.Provider value={value}>{children}</TransitContext.Provider>;
 };

@@ -89,6 +89,15 @@ async function startServer() {
     )
   `;
 
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_hidden_live_trips (
+      driver_id TEXT PRIMARY KEY,
+      trip_id TEXT NOT NULL,
+      hidden_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
   await sql`
     CREATE TABLE IF NOT EXISTS datscogo_trip_history (
       trip_id TEXT PRIMARY KEY,
@@ -361,6 +370,25 @@ async function startServer() {
     }
 
     try {
+      const rows = await sql`
+        SELECT trip_value
+        FROM datscogo_live_trips
+        WHERE driver_id = ${driverId}
+        LIMIT 1
+      `;
+      const trip = validObject(rows[0]?.trip_value) ? rows[0].trip_value : null;
+      const tripId = trip ? String(trip.id || "").trim() : "";
+
+      if (tripId) {
+        await sql`
+          INSERT INTO datscogo_hidden_live_trips (driver_id, trip_id, hidden_at)
+          VALUES (${driverId}, ${tripId}, NOW())
+          ON CONFLICT (driver_id) DO UPDATE SET
+            trip_id = EXCLUDED.trip_id,
+            hidden_at = NOW()
+        `;
+      }
+
       await sql`
         DELETE FROM datscogo_live_trips
         WHERE driver_id = ${driverId}
@@ -403,8 +431,30 @@ async function startServer() {
 
       if (!driverIsActive) {
         await sql`DELETE FROM datscogo_live_trips WHERE driver_id = ${driverId}`;
+        await sql`DELETE FROM datscogo_hidden_live_trips WHERE driver_id = ${driverId}`;
         return res.status(403).json({ ok: false, error: "Driver account is no longer active." });
       }
+
+      const incomingTripId = String(incomingTrip.id || "").trim();
+      const hiddenRows = await sql`
+        SELECT trip_id
+        FROM datscogo_hidden_live_trips
+        WHERE driver_id = ${driverId}
+        LIMIT 1
+      `;
+      const hiddenTripId = String(hiddenRows[0]?.trip_id || "").trim();
+
+      // If an administrator removed this exact live trip from the public map,
+      // ignore subsequent automatic GPS updates from the same trip. A newly
+      // started trip has a new ID and is allowed to appear again normally.
+      if (hiddenTripId && hiddenTripId === incomingTripId) {
+        await sql`DELETE FROM datscogo_live_trips WHERE driver_id = ${driverId}`;
+        return res.status(409).json({ ok: false, error: "This trip was removed from the public map by an administrator." });
+      }
+      if (hiddenTripId && hiddenTripId !== incomingTripId) {
+        await sql`DELETE FROM datscogo_hidden_live_trips WHERE driver_id = ${driverId}`;
+      }
+
       const existingRows = await sql`
         SELECT trip_value
         FROM datscogo_live_trips

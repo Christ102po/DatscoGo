@@ -504,6 +504,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     contact,
     createDriver,
     deleteDriver,
+    removeLiveLocation,
     setAdminPassword,
     addSchedule,
     deleteSchedule,
@@ -555,6 +556,15 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     const result = await resolveTripIncident(driverId);
     if (!result.ok) return inform(result.error ?? 'Unable to resolve the safety alert.', true);
     inform('Driver safety alert resolved.');
+  };
+
+
+  const removeMapLocation = async (trip: ActiveTrip) => {
+    const name = driverLabel(trip.driverId, trip.driverName);
+    if (!window.confirm(`Remove ${name}'s displayed location from the public map? The driver account will remain active.`)) return;
+    const result = await removeLiveLocation(trip.driverId);
+    if (!result.ok) return inform(result.error ?? 'Unable to remove the live location.', true);
+    inform(`${name}'s live location was removed from the map.`);
   };
 
   const createNewDriver = async (event: React.FormEvent) => {
@@ -640,7 +650,20 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
                 return <article key={label as string} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><span className="inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600"><MetricIcon size={20} /></span><p className="mt-4 text-2xl font-black">{value as string | number}</p><p className="mt-1 text-xs font-bold uppercase tracking-[.1em] text-slate-500">{label as string}</p></article>;
               })}
             </div>
-            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><h2 className="text-base font-black">Vehicle trips</h2><p className="mt-2 text-sm text-slate-600">{activeTrips.length ? `${liveTripCount} live vehicle${liveTripCount === 1 ? '' : 's'} and ${arrivedTripCount} vehicle${arrivedTripCount === 1 ? '' : 's'} at destination.` : 'No driver is currently reporting an active trip.'}</p>{pendingSafetyChecks > 0 && <p className="mt-2 text-xs font-bold text-amber-700">{pendingSafetyChecks} driver safety check{pendingSafetyChecks === 1 ? '' : 's'} currently awaiting a response.</p>}</article>
+            <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div><h2 className="text-base font-black">Vehicle trips</h2><p className="mt-2 text-sm text-slate-600">{activeTrips.length ? `${liveTripCount} live vehicle${liveTripCount === 1 ? '' : 's'} and ${arrivedTripCount} vehicle${arrivedTripCount === 1 ? '' : 's'} at destination.` : 'No driver is currently reporting an active trip.'}</p>{pendingSafetyChecks > 0 && <p className="mt-2 text-xs font-bold text-amber-700">{pendingSafetyChecks} driver safety check{pendingSafetyChecks === 1 ? '' : 's'} currently awaiting a response.</p>}</div>
+              </div>
+              <div className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200">
+                {activeTrips.filter((trip) => trip.status === 'departed').map((trip) => (
+                  <div key={trip.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0"><p className="truncate text-sm font-black text-slate-900">{driverLabel(trip.driverId, trip.driverName)}</p><p className="mt-0.5 truncate text-xs text-slate-500">{routeLabel(trip.routeId)} · {trip.latitude.toFixed(5)}, {trip.longitude.toFixed(5)}</p></div>
+                    <button type="button" onClick={() => void removeMapLocation(trip)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-black text-red-600 transition hover:bg-red-50"><Trash2 size={15} />Remove from map</button>
+                  </div>
+                ))}
+                {liveTripCount === 0 && <div className="p-4 text-center text-xs font-semibold text-slate-400">No live driver locations are currently displayed on the public map.</div>}
+              </div>
+            </article>
             <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-base font-black">Public contact details</h2><div className="mt-4 grid gap-3 sm:grid-cols-3"><input value={contact.facebook} onChange={(event) => updateContact({ ...contact, facebook: event.target.value })} placeholder="Facebook page" className={inputClass} /><input value={contact.phone} onChange={(event) => updateContact({ ...contact, phone: event.target.value })} placeholder="Contact number" className={inputClass} /><input type="email" value={contact.email} onChange={(event) => updateContact({ ...contact, email: event.target.value })} placeholder="Email address" className={inputClass} /></div></article>
           </div>
         )}
