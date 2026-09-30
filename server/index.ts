@@ -3,6 +3,7 @@ import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import postgres from "postgres";
+import { randomUUID } from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -102,6 +103,24 @@ async function startServer() {
   await sql`
     CREATE TABLE IF NOT EXISTS datscogo_announcement_images (
       announcement_id TEXT PRIMARY KEY,
+      content_type TEXT NOT NULL,
+      image_data BYTEA NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_driver_reports (
+      report_id TEXT PRIMARY KEY,
+      report_value JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_driver_report_images (
+      report_id TEXT PRIMARY KEY,
       content_type TEXT NOT NULL,
       image_data BYTEA NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -314,6 +333,130 @@ async function startServer() {
     } catch (error) {
       console.error('Announcement image delete failed:', error);
       res.status(500).json({ ok: false, error: 'Unable to remove the announcement image.' });
+    }
+  });
+
+  // --------------------------------------------------
+  // PASSENGER DRIVER REPORTS
+  // --------------------------------------------------
+
+  app.post('/api/driver-reports', async (req, res) => {
+    if (!validObject(req.body)) return res.status(400).json({ ok: false, error: 'Invalid report.' });
+
+    const routeId = typeof req.body.routeId === 'string' ? req.body.routeId.trim() : '';
+    const routeTitle = typeof req.body.routeTitle === 'string' ? req.body.routeTitle.trim().slice(0, 160) : '';
+    const issueType = typeof req.body.issueType === 'string' ? req.body.issueType.trim().slice(0, 80) : '';
+    const details = typeof req.body.details === 'string' ? req.body.details.trim().slice(0, 2000) : '';
+    const reporterName = typeof req.body.reporterName === 'string' ? req.body.reporterName.trim().slice(0, 120) : '';
+    const imageDataUrl = typeof req.body.imageDataUrl === 'string' ? req.body.imageDataUrl : '';
+
+    if (!routeId || !routeTitle || !issueType || !details) {
+      return res.status(400).json({ ok: false, error: 'Choose the route, issue type, and describe what happened.' });
+    }
+
+    const reportId = `driver-report-${randomUUID()}`;
+    const createdAt = Date.now();
+    const reportValue = {
+      id: reportId,
+      routeId,
+      routeTitle,
+      issueType,
+      details,
+      reporterName: reporterName || null,
+      anonymous: !reporterName,
+      hasPhoto: Boolean(imageDataUrl),
+      status: 'open',
+      createdAt,
+    };
+
+    try {
+      if (imageDataUrl) {
+        const match = /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/.exec(imageDataUrl);
+        if (!match) return res.status(400).json({ ok: false, error: 'Use a PNG, JPG, JPEG, or WEBP photo.' });
+        const imageData = Buffer.from(match[2], 'base64');
+        if (imageData.length === 0 || imageData.length > 3 * 1024 * 1024) {
+          return res.status(413).json({ ok: false, error: 'Report photos must be 3 MB or smaller after processing.' });
+        }
+        await sql`
+          INSERT INTO datscogo_driver_report_images (report_id, content_type, image_data, updated_at)
+          VALUES (${reportId}, ${match[1]}, ${imageData}, NOW())
+        `;
+      }
+
+      await sql`
+        INSERT INTO datscogo_driver_reports (report_id, report_value, created_at, updated_at)
+        VALUES (${reportId}, ${sql.json(reportValue)}, NOW(), NOW())
+      `;
+      res.json({ ok: true, reportId });
+    } catch (error) {
+      console.error('Create driver report failed:', error);
+      await sql`DELETE FROM datscogo_driver_report_images WHERE report_id = ${reportId}`.catch(() => undefined);
+      res.status(500).json({ ok: false, error: 'Unable to submit the report right now.' });
+    }
+  });
+
+  app.get('/api/driver-reports', async (_req, res) => {
+    try {
+      const rows = await sql`
+        SELECT report_id, report_value, created_at, updated_at
+        FROM datscogo_driver_reports
+        ORDER BY created_at DESC
+      `;
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(rows.map((row) => ({
+        ...row.report_value,
+        id: row.report_id,
+        createdAt: new Date(row.created_at).getTime(),
+        updatedAt: new Date(row.updated_at).getTime(),
+        photoUrl: row.report_value?.hasPhoto ? `/api/driver-report-images/${encodeURIComponent(row.report_id)}` : undefined,
+      })));
+    } catch (error) {
+      console.error('Read driver reports failed:', error);
+      res.status(500).json({ error: 'Unable to read passenger reports.' });
+    }
+  });
+
+  app.patch('/api/driver-reports/:reportId', async (req, res) => {
+    const reportId = String(req.params.reportId || '').trim();
+    const status = validObject(req.body) && (req.body.status === 'open' || req.body.status === 'reviewed') ? req.body.status : null;
+    if (!reportId || !status) return res.status(400).json({ ok: false, error: 'Invalid report update.' });
+    try {
+      const rows = await sql`SELECT report_value FROM datscogo_driver_reports WHERE report_id = ${reportId} LIMIT 1`;
+      if (!rows[0]) return res.status(404).json({ ok: false, error: 'Report not found.' });
+      const next = { ...rows[0].report_value, status };
+      await sql`UPDATE datscogo_driver_reports SET report_value = ${sql.json(next)}, updated_at = NOW() WHERE report_id = ${reportId}`;
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Update driver report failed:', error);
+      res.status(500).json({ ok: false, error: 'Unable to update the report.' });
+    }
+  });
+
+  app.delete('/api/driver-reports/:reportId', async (req, res) => {
+    const reportId = String(req.params.reportId || '').trim();
+    if (!reportId) return res.status(400).json({ ok: false, error: 'Report ID is required.' });
+    try {
+      await sql.begin(async (tx) => {
+        await tx`DELETE FROM datscogo_driver_report_images WHERE report_id = ${reportId}`;
+        await tx`DELETE FROM datscogo_driver_reports WHERE report_id = ${reportId}`;
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Delete driver report failed:', error);
+      res.status(500).json({ ok: false, error: 'Unable to delete the report.' });
+    }
+  });
+
+  app.get('/api/driver-report-images/:reportId', async (req, res) => {
+    try {
+      const rows = await sql`SELECT content_type, image_data FROM datscogo_driver_report_images WHERE report_id = ${String(req.params.reportId || '')} LIMIT 1`;
+      if (!rows[0]) return res.status(404).end();
+      res.setHeader('Content-Type', rows[0].content_type);
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.send(rows[0].image_data);
+    } catch (error) {
+      console.error('Read driver report image failed:', error);
+      res.status(500).end();
     }
   });
 

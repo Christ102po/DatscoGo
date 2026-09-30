@@ -5,11 +5,12 @@ import {
   Info,
   LogIn,
   Mail,
+  Flag,
   X,
 } from 'lucide-react';
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 
-export type SidebarAction = 'about' | 'contact' | 'help' | 'login';
+export type SidebarAction = 'about' | 'contact' | 'help' | 'report' | 'login';
 
 interface DatscoGoSidebarProps {
   isOpen: boolean;
@@ -29,6 +30,7 @@ const sidebarItems = [
   { action: 'about' as const, label: 'About Us', icon: Info },
   { action: 'contact' as const, label: 'Contact Us', icon: Mail },
   { action: 'help' as const, label: 'Help', icon: CircleHelp },
+  { action: 'report' as const, label: 'Report Driver', icon: Flag },
   { action: 'login' as const, label: 'Login', icon: LogIn },
 ];
 

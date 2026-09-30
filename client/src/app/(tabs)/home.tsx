@@ -15,6 +15,7 @@ import { useTransit } from '../../contexts/TransitContext';
 import { DriverDashboard } from '../../components/Driver/DriverDashboard';
 import { AdminDashboard } from '../../components/Admin/AdminDashboard';
 import { LocationPermissionPrompt } from '../../components/Common/LocationPermissionPrompt';
+import { PassengerReportModal } from '../../components/Common/PassengerReportModal';
 
 type PassengerTab = 'datsco' | 'schedule' | 'terminal';
 type PassengerScreen = 'home' | 'datsco-routes' | 'schedule' | 'terminal';
@@ -33,6 +34,7 @@ export default function HomeTabScreen() {
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showMenuDrawer, setShowMenuDrawer] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [scheduleModalRoute, setScheduleModalRoute] = useState<string | null>(null);
   const [splashState, setSplashState] = useState<'visible' | 'exiting' | 'hidden'>('visible');
   const [informationView, setInformationView] = useState<InformationPanelView>(null);
@@ -329,6 +331,10 @@ export default function HomeTabScreen() {
       setShowLogin(true);
       return;
     }
+    if (action === 'report') {
+      setShowReportModal(true);
+      return;
+    }
     setInformationView(action);
   };
 
@@ -481,7 +487,8 @@ export default function HomeTabScreen() {
           </div>
         )}
 
-        <DatscoGoSidebar isOpen={showMenuDrawer} onClose={() => setShowMenuDrawer(false)} onSelect={handleSidebarAction} />
+        <PassengerReportModal isOpen={showReportModal} routes={routes} onClose={() => setShowReportModal(false)} />
+                <DatscoGoSidebar isOpen={showMenuDrawer} onClose={() => setShowMenuDrawer(false)} onSelect={handleSidebarAction} />
         <InformationPanel
           view={informationView}
           onClose={() => setInformationView(null)}
