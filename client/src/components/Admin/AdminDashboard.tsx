@@ -3,8 +3,6 @@ import {
   BellRing,
   BusFront,
   CalendarClock,
-  Check,
-  CircleAlert,
   ClipboardList,
   Flag,
   ImagePlus,
@@ -28,9 +26,9 @@ import { RouteMapPicker } from './RouteMapPicker';
 import { TerminalLocationPicker } from './TerminalLocationPicker';
 import { Account, ActiveTrip, RepairShop, RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
 import { fetchRoadRoute } from '../../lib/routing';
+import { confirmAction, showError, showToast } from '../../lib/sweetalert';
 
 type Section = 'overview' | 'routes' | 'schedules' | 'terminals' | 'repair-shops' | 'announcements' | 'reports' | 'drivers' | 'trip-records' | 'security';
-type Notice = { error?: boolean; text: string } | null;
 type RouteDraft = Omit<TransitRoute, 'id' | 'coordinates' | 'waypoints' | 'discountedFare'>;
 
 const inputClass = 'mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100';
@@ -290,13 +288,13 @@ function TerminalManager({ onNotice }: { onNotice: (message: string, error?: boo
     reset();
   };
 
-  const remove = (terminal: Terminal) => {
+  const remove = async (terminal: Terminal) => {
     const affectedRoutes = routes.filter((route) => route.originTerminalId === terminal.id || route.destinationTerminalId === terminal.id).map((route) => route.title);
     if (affectedRoutes.length > 0) {
       onNotice(`This terminal cannot be deleted. It is used by: ${affectedRoutes.join(', ')}. Edit or remove those routes first.`, true);
       return;
     }
-    if (!window.confirm(`Delete ${terminal.name} from the passenger map? This cannot be undone.`)) return;
+    if (!(await confirmAction('Delete terminal?', `Delete ${terminal.name} from the passenger map? This cannot be undone.`, 'Delete terminal'))) return;
     const result = deleteTerminal(terminal.id);
     if (!result.ok) return onNotice('This terminal can no longer be deleted because a route now uses it.', true);
     if (editingId === terminal.id) reset();
@@ -374,8 +372,8 @@ function RepairShopManager({ onNotice }: { onNotice: (message: string, error?: b
     reset();
   };
 
-  const remove = (shop: RepairShop) => {
-    if (!window.confirm(`Delete ${shop.name} from the driver repair-shop map?`)) return;
+  const remove = async (shop: RepairShop) => {
+    if (!(await confirmAction('Delete repair shop?', `Delete ${shop.name} from the driver repair-shop map?`, 'Delete shop'))) return;
     deleteRepairShop(shop.id);
     if (editingId === shop.id) reset();
     onNotice('Repair shop removed from the driver map.');
@@ -454,6 +452,18 @@ function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?:
     reader.readAsDataURL(file);
   };
 
+  const setAnnouncementVisibility = (id: string, active: boolean) => {
+    toggleAnnouncement(id);
+    onNotice(active ? 'Announcement hidden from passengers.' : 'Announcement is active again.');
+  };
+
+  const removeAnnouncement = async (id: string, title: string) => {
+    const confirmed = await confirmAction('Delete announcement?', `Delete ${title || 'this announcement'} permanently?`, 'Delete announcement');
+    if (!confirmed) return;
+    deleteAnnouncement(id);
+    onNotice('Announcement deleted.');
+  };
+
   const publish = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!draft.title.trim() && !draft.message.trim() && !draft.imageDataUrl) return onNotice('Add a title, message, or picture before publishing.', true);
@@ -497,7 +507,7 @@ function AnnouncementManager({ onNotice }: { onNotice: (message: string, error?:
               {announcement.imageUrl && <img src={announcement.imageUrl} alt={announcement.title || 'Announcement'} className="max-h-72 w-full bg-white object-contain" />}
               <div className="flex flex-wrap items-start justify-between gap-3 p-4">
                 <div className="min-w-0 flex-1">{announcement.title && <p className="text-sm font-black text-slate-900">{announcement.title}</p>}{announcement.message && <p className={`${announcement.title ? 'mt-1' : ''} text-xs leading-5 text-slate-600`}>{announcement.message}</p>}<p className="mt-2 text-[10px] font-semibold text-slate-400">{new Date(announcement.createdAt).toLocaleString()}</p></div>
-                <div className="flex gap-2"><button type="button" onClick={() => toggleAnnouncement(announcement.id)} className={`rounded-xl px-3 py-2 text-xs font-bold ${announcement.active ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{announcement.active ? 'Active' : 'Hidden'}</button><button type="button" onClick={() => deleteAnnouncement(announcement.id)} className="rounded-xl border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label={`Delete ${announcement.title || 'announcement'}`}><Trash2 size={17} /></button></div>
+                <div className="flex gap-2"><button type="button" onClick={() => setAnnouncementVisibility(announcement.id, announcement.active)} className={`rounded-xl px-3 py-2 text-xs font-bold ${announcement.active ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-slate-600 ring-1 ring-slate-200'}`}>{announcement.active ? 'Active' : 'Hidden'}</button><button type="button" onClick={() => void removeAnnouncement(announcement.id, announcement.title)} className="rounded-xl border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label={`Delete ${announcement.title || 'announcement'}`}><Trash2 size={17} /></button></div>
               </div>
             </article>
           ))}
@@ -578,7 +588,7 @@ function TripRecordsPanel({
   };
 
   const deleteRecord = async (trip: ActiveTrip) => {
-    if (!window.confirm(`Delete this trip record for ${driverName(trip.driverId, trip.driverName)}? This cannot be undone.`)) return;
+    if (!(await confirmAction('Delete trip record?', `Delete this trip record for ${driverName(trip.driverId, trip.driverName)}? This cannot be undone.`, 'Delete record'))) return;
     try {
       const response = await fetch(`/api/trip-records/${encodeURIComponent(trip.id)}`, { method: 'DELETE' });
       if (!response.ok) throw new Error();
@@ -590,7 +600,7 @@ function TripRecordsPanel({
   };
 
   const deleteAll = async () => {
-    if (!records.length || !window.confirm(`Delete all ${records.length} driver trip records? This cannot be undone.`)) return;
+    if (!records.length || !(await confirmAction('Delete all trip records?', `Delete all ${records.length} driver trip records? This cannot be undone.`, 'Delete all records'))) return;
     try {
       const response = await fetch('/api/trip-records', { method: 'DELETE' });
       if (!response.ok) throw new Error();
@@ -680,7 +690,7 @@ function DriverReportsPanel({ onNotice }: { onNotice: (message: string, error?: 
   };
 
   const remove = async (report: DriverIssueReport) => {
-    if (!window.confirm('Delete this passenger report? This cannot be undone.')) return;
+    if (!(await confirmAction('Delete passenger report?', 'Delete this passenger report? This cannot be undone.', 'Delete report'))) return;
     const response = await fetch(`/api/driver-reports/${encodeURIComponent(report.id)}`, { method: 'DELETE' });
     const payload = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) return onNotice(payload.error || 'Unable to delete this report.', true);
@@ -750,7 +760,6 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   } = useTransit();
 
   const [section, setSection] = useState<Section>('overview');
-  const [notice, setNotice] = useState<Notice>(null);
   const [driver, setDriver] = useState({ displayName: '', username: '', password: '' });
   const [schedule, setSchedule] = useState({ routeId: routes[0]?.id ?? '', time: '', period: 'Morning' as 'Morning' | 'Afternoon', days: 'Monday – Saturday' });
   const [password, setPassword] = useState({ current: '', next: '' });
@@ -771,8 +780,8 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   const incidentTrips = activeTrips.filter((trip) => trip.safetyIncident?.active);
   const pendingSafetyChecks = activeTrips.filter((trip) => trip.status === 'departed' && trip.safetyCheckStatus === 'pending').length;
   const inform = (text: string, error = false) => {
-    setNotice({ text, error });
-    window.setTimeout(() => setNotice(null), 3500);
+    if (error) void showError(text);
+    else void showToast(text);
   };
 
   const nav: Array<[Section, string, typeof Route]> = [
@@ -800,10 +809,17 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
 
   const removeMapLocation = async (trip: ActiveTrip) => {
     const name = driverLabel(trip.driverId, trip.driverName);
-    if (!window.confirm(`Remove ${name}'s displayed location from the public map? The driver account will remain active.`)) return;
+    if (!(await confirmAction('Remove live location?', `Remove ${name}'s displayed location from the public map? The driver account will remain active.`, 'Remove from map'))) return;
     const result = await removeLiveLocation(trip.driverId);
     if (!result.ok) return inform(result.error ?? 'Unable to remove the live location.', true);
     inform(`${name}'s live location was removed from the map.`);
+  };
+
+  const deleteDriverAccount = async (driverItem: Account) => {
+    const confirmed = await confirmAction('Delete driver account?', `Delete ${driverItem.displayName}'s driver account? This cannot be undone.`, 'Delete driver');
+    if (!confirmed) return;
+    deleteDriver(driverItem.id);
+    inform('Driver account deleted.');
   };
 
   const createNewDriver = async (event: React.FormEvent) => {
@@ -822,6 +838,18 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     inform('Schedule added.');
   };
 
+  const removeSchedule = async (id: string) => {
+    const confirmed = await confirmAction('Delete schedule?', 'Remove this schedule entry? Passengers will no longer see its departure information.', 'Delete schedule');
+    if (!confirmed) return;
+    deleteSchedule(id);
+    inform('Schedule deleted.');
+  };
+
+  const confirmLogout = async () => {
+    const confirmed = await confirmAction('Log out?', 'Are you sure you want to leave the administrator dashboard?', 'Log out', 'question');
+    if (confirmed) onLogout();
+  };
+
   const changePassword = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = await setAdminPassword(password.current, password.next);
@@ -831,7 +859,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   };
 
   if (currentUser?.role !== 'admin') {
-    return <main className="grid min-h-screen place-items-center bg-slate-50 p-6"><section className="max-w-sm rounded-3xl bg-white p-6 text-center shadow-xl"><ShieldCheck className="mx-auto text-blue-600" size={34} /><h1 className="mt-3 text-xl font-black">Administrator access required</h1><button onClick={onLogout} className="mt-5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Return to DatscoGo</button></section></main>;
+    return <main className="grid min-h-screen place-items-center bg-slate-50 p-6"><section className="max-w-sm rounded-3xl bg-white p-6 text-center shadow-xl"><ShieldCheck className="mx-auto text-blue-600" size={34} /><h1 className="mt-3 text-xl font-black">Administrator access required</h1><button onClick={() => void confirmLogout()} className="mt-5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Return to DatscoGo</button></section></main>;
   }
 
   return (
@@ -841,13 +869,11 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
         <nav className="mt-3 flex gap-2 overflow-x-auto pb-1 lg:mt-5 lg:flex-col lg:overflow-y-auto">
           {nav.map(([id, label, Icon]) => <button key={id} onClick={() => setSection(id)} className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-bold transition active:scale-[.98] ${section === id ? 'bg-blue-600 shadow-lg shadow-blue-950/30' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><Icon size={18} />{label}</button>)}
         </nav>
-        <div className="mt-auto hidden border-t border-white/10 pt-4 lg:block"><p className="px-3 text-xs font-bold">{currentUser.displayName}</p><button onClick={onLogout} className="mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-300 hover:bg-white/10 hover:text-white"><LogOut size={17} />Logout</button></div>
+        <div className="mt-auto hidden border-t border-white/10 pt-4 lg:block"><p className="px-3 text-xs font-bold">{currentUser.displayName}</p><button onClick={() => void confirmLogout()} className="mt-3 flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-300 hover:bg-white/10 hover:text-white"><LogOut size={17} />Logout</button></div>
       </aside>
 
       <section className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
-        <header className="mb-6 flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.15em] text-blue-600">DatscoGo management</p><h1 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">{nav.find(([id]) => id === section)?.[1]}</h1></div><button onClick={onLogout} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 lg:hidden"><LogOut className="mr-1 inline" size={15} />Logout</button></header>
-
-        {notice && <div role="status" className={`mb-5 flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${notice.error ? 'border-red-200 bg-red-50 text-red-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{notice.error ? <CircleAlert size={17} /> : <Check size={17} />}{notice.text}</div>}
+        <header className="mb-6 flex items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.15em] text-blue-600">DatscoGo management</p><h1 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">{nav.find(([id]) => id === section)?.[1]}</h1></div><button onClick={() => void confirmLogout()} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 lg:hidden"><LogOut className="mr-1 inline" size={15} />Logout</button></header>
 
         {incidentTrips.length > 0 && (
           <section className="mb-5 overflow-hidden rounded-3xl border-2 border-red-300 bg-red-50 shadow-lg shadow-red-900/10">
@@ -917,14 +943,14 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
         {section === 'schedules' && (
           <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
             <form onSubmit={createSchedule} className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Add schedule entry</h2><div className="mt-4 space-y-3"><select value={schedule.routeId} onChange={(event) => setSchedule({ ...schedule, routeId: event.target.value })} className={inputClass}>{routes.map((route) => <option key={route.id} value={route.id}>{route.title}</option>)}</select><input required value={schedule.time} onChange={(event) => setSchedule({ ...schedule, time: event.target.value })} placeholder="6:30 – 7:00am" className={inputClass} /><select value={schedule.period} onChange={(event) => setSchedule({ ...schedule, period: event.target.value as 'Morning' | 'Afternoon' })} className={inputClass}><option>Morning</option><option>Afternoon</option></select><input value={schedule.days} onChange={(event) => setSchedule({ ...schedule, days: event.target.value })} placeholder="Monday – Saturday" className={inputClass} /><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><Plus size={17} />Add schedule</button></div></form>
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Current schedule entries</h2><div className="mt-4 divide-y divide-slate-100">{schedules.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{routeLabel(item.routeId)}</p><p className="text-xs text-slate-500">{item.period} · {item.time} · {item.days}</p></div><button type="button" onClick={() => deleteSchedule(item.id)} className="rounded-xl p-2 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="Delete schedule"><Trash2 size={17} /></button></div>)}</div></section>
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Current schedule entries</h2><div className="mt-4 divide-y divide-slate-100">{schedules.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 py-3"><div><p className="text-sm font-bold">{routeLabel(item.routeId)}</p><p className="text-xs text-slate-500">{item.period} · {item.time} · {item.days}</p></div><button type="button" onClick={() => void removeSchedule(item.id)} className="rounded-xl p-2 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label="Delete schedule"><Trash2 size={17} /></button></div>)}</div></section>
           </div>
         )}
 
         {section === 'drivers' && (
           <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
             <form onSubmit={createNewDriver} className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Register driver</h2><div className="mt-4 space-y-3"><input required value={driver.displayName} onChange={(event) => setDriver({ ...driver, displayName: event.target.value })} placeholder="Driver name" className={inputClass} /><input required value={driver.username} onChange={(event) => setDriver({ ...driver, username: event.target.value })} placeholder="Username" className={inputClass} /><input required type="password" value={driver.password} onChange={(event) => setDriver({ ...driver, password: event.target.value })} placeholder="Temporary password (8+ characters)" className={inputClass} /><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><Plus size={17} />Create driver account</button></div></form>
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Registered drivers</h2><div className="mt-4 divide-y divide-slate-100">{drivers.map((driverItem) => <div key={driverItem.id} className="flex items-center justify-between gap-3 py-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><BusFront size={18} /></span><div><p className="text-sm font-bold">{driverItem.displayName}</p><p className="text-xs text-slate-500">@{driverItem.username}</p></div></div><button type="button" onClick={() => { if (window.confirm(`Delete ${driverItem.displayName}'s driver account? This cannot be undone.`)) { deleteDriver(driverItem.id); inform('Driver account deleted.'); } }} className="rounded-xl border border-red-200 p-2 text-red-600 transition hover:bg-red-50" aria-label={`Delete ${driverItem.displayName}`}><Trash2 size={17} /></button></div>)}</div></section>
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Registered drivers</h2><div className="mt-4 divide-y divide-slate-100">{drivers.map((driverItem) => <div key={driverItem.id} className="flex items-center justify-between gap-3 py-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><BusFront size={18} /></span><div><p className="text-sm font-bold">{driverItem.displayName}</p><p className="text-xs text-slate-500">@{driverItem.username}</p></div></div><button type="button" onClick={() => void deleteDriverAccount(driverItem)} className="rounded-xl border border-red-200 p-2 text-red-600 transition hover:bg-red-50" aria-label={`Delete ${driverItem.displayName}`}><Trash2 size={17} /></button></div>)}</div></section>
           </div>
         )}
 

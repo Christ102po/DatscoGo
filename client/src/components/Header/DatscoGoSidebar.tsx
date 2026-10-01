@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
+import { showInfo, showToast } from '../../lib/sweetalert';
 
 export type SidebarAction = 'about' | 'contact' | 'help' | 'report' | 'login';
 
@@ -97,6 +98,7 @@ export const DatscoGoSidebar: React.FC<DatscoGoSidebarProps> = ({
 
       if (result.outcome === 'accepted') {
         setInstallPrompt(null);
+        void showToast('DatscoGo installation started.');
       }
 
       return;
@@ -105,15 +107,11 @@ export const DatscoGoSidebar: React.FC<DatscoGoSidebarProps> = ({
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
 
     if (isIOS) {
-      window.alert(
-        'To install DatscoGo on iPhone/iPad: tap the Share button in Safari, then choose "Add to Home Screen".',
-      );
+      void showInfo('Install DatscoGo', 'On iPhone/iPad, tap the Share button in Safari, then choose “Add to Home Screen”.');
       return;
     }
 
-    window.alert(
-      'DatscoGo cannot be installed yet. Open the online DatscoGo website using Chrome, then try again.',
-    );
+    void showInfo('Install unavailable', 'DatscoGo cannot be installed yet. Open the online DatscoGo website using Chrome, then try again.');
   };
 
   return (

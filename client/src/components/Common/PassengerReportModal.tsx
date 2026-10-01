@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Camera, ImagePlus, ShieldCheck, X } from 'lucide-react';
 import { TransitRoute } from '../../contexts/TransitContext';
+import { showError, showToast } from '../../lib/sweetalert';
 
 interface PassengerReportModalProps {
   isOpen: boolean;
@@ -60,22 +61,23 @@ export const PassengerReportModal: React.FC<PassengerReportModalProps> = ({ isOp
 
   const selectPhoto = async (file?: File) => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) return setNotice({ text: 'Please choose an image file.', error: true });
+    if (!file.type.startsWith('image/')) { void showError('Please choose an image file.'); return; }
     try {
       setNotice({ text: 'Preparing photo…' });
       const prepared = await compressImage(file);
       setImageDataUrl(prepared);
       setNotice(null);
     } catch (error) {
-      setNotice({ text: error instanceof Error ? error.message : 'Unable to prepare this photo.', error: true });
+      void showError(error instanceof Error ? error.message : 'Unable to prepare this photo.');
+      setNotice(null);
     }
   };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const route = routes.find((item) => item.id === routeId);
-    if (!route) return setNotice({ text: 'Choose the route where the issue happened.', error: true });
-    if (!details.trim()) return setNotice({ text: 'Please describe what happened.', error: true });
+    if (!route) { void showError('Choose the route where the issue happened.'); return; }
+    if (!details.trim()) { void showError('Please describe what happened.'); return; }
 
     setSending(true);
     setNotice(null);
@@ -100,10 +102,10 @@ export const PassengerReportModal: React.FC<PassengerReportModalProps> = ({ isOp
       setDetails('');
       setReporterName('');
       setImageDataUrl(null);
-      setNotice({ text: 'Report submitted. The DatscoGo administrator can now review it.' });
-      window.setTimeout(onClose, 1200);
+      await showToast('Report submitted. The administrator can now review it.');
+      onClose();
     } catch (error) {
-      setNotice({ text: error instanceof Error ? error.message : 'Unable to submit your report.', error: true });
+      void showError(error instanceof Error ? error.message : 'Unable to submit your report.');
     } finally {
       setSending(false);
     }
