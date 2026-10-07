@@ -8,7 +8,6 @@ export interface Account {
   username: string;
   displayName: string;
   role: UserRole;
-  passwordHash: string;
   active: boolean;
 }
 
@@ -144,7 +143,7 @@ type StoredTransitStore = Omit<TransitStore, 'activeTrips' | 'announcements' | '
 type PublicTransitState = Pick<TransitStore, 'routes' | 'schedules' | 'terminals' | 'repairShops' | 'announcements' | 'contact'>;
 
 interface TransitContextValue extends TransitStore {
-  currentUser: Omit<Account, 'passwordHash'> | null;
+  currentUser: Account | null;
   isReady: boolean;
   login: (username: string, password: string) => Promise<UserRole | null>;
   logout: () => void;
@@ -175,22 +174,11 @@ interface TransitContextValue extends TransitStore {
 }
 
 const STORAGE_KEY = 'datscogo-transit-store-v2';
-const SESSION_KEY = 'datscogo-session-v2';
-const PASSWORD_SALT = 'datscogo-v1:';
 
 const initialStore: TransitStore = {
   // Keep only the administrator account. All operational transit data starts
   // empty and is created from the admin dashboard.
-  accounts: [
-    {
-      id: 'admin-1',
-      username: 'admin123',
-      displayName: 'DatscoGo Administrator',
-      role: 'admin',
-      passwordHash: 'f23f36eba2232bf1ca13855cb58386c1fbe29e884bc2ce0a646db4d60656c204',
-      active: true,
-    },
-  ],
+  accounts: [],
   routes: [],
   schedules: [],
   terminals: [],
@@ -202,11 +190,6 @@ const initialStore: TransitStore = {
 
 const TransitContext = createContext<TransitContextValue | null>(null);
 
-async function digestPassword(password: string) {
-  const data = new TextEncoder().encode(`${PASSWORD_SALT}${password}`);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
 
 function storedValue<T>(key: string): T | null {
   try {
@@ -282,6 +265,7 @@ function publicStateFrom(store: TransitStore): PublicTransitState {
 async function publishPublicState(store: TransitStore) {
   const response = await fetch('/api/public-state', {
     method: 'PUT',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(publicStateFrom(store)),
   });
@@ -291,22 +275,12 @@ async function publishPublicState(store: TransitStore) {
 }
 
 
-async function publishAccounts(accounts: Account[]) {
-  try {
-    await fetch('/api/accounts', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(accounts),
-    });
-  } catch {
-    // Local development can continue with localStorage if the shared API is unavailable.
-  }
-}
 
 async function publishTrip(trip: ActiveTrip) {
   try {
     await fetch(`/api/trips/${encodeURIComponent(trip.driverId)}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(trip),
     });
@@ -319,6 +293,7 @@ async function deletePublishedTrip(driverId: string) {
   try {
     const response = await fetch(`/api/trips/${encodeURIComponent(driverId)}`, {
       method: 'DELETE',
+      credentials: 'include',
     });
     const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
     if (!response.ok) return { ok: false, error: payload.error || 'Unable to remove the live location.' };
@@ -331,6 +306,7 @@ async function deletePublishedTrip(driverId: string) {
 async function publishSafetyAction(driverId: string, action: 'cancel' | 'report' | 'resolve') {
   const response = await fetch(`/api/trips/${encodeURIComponent(driverId)}/safety`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action }),
   });
@@ -368,7 +344,7 @@ export function replaceDriverActiveTrip(activeTrips: ActiveTrip[], nextTrip: Act
 export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const [store, setStore] = useState<TransitStore>(initialStore);
   const storeRef = useRef<TransitStore>(initialStore);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<Account | null>(null);
   const [isReady, setIsReady] = useState(false);
   // Prevent the 2.5-second server poll from replacing a just-created admin
   // change with an older database snapshot while that change is still saving.
@@ -376,16 +352,21 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
   const publicWritePendingRef = useRef(false);
 
   useEffect(() => {
-    // This release intentionally starts without the previous demo transit data.
+    // Public transit data may be cached locally, but authentication never is.
     localStorage.removeItem('datscogo-transit-store-v1');
     localStorage.removeItem('datscogo-session-v1');
+    localStorage.removeItem('datscogo-session-v2');
     const restored = storedValue<StoredTransitStore>(STORAGE_KEY);
-    const restoredSession = storedValue<{ userId: string }>(SESSION_KEY);
-    if (restored?.accounts && restored?.routes && restored?.schedules && restored?.terminals) {
-      setStore(normalizeStoredStore(restored));
+    if (restored?.routes && restored?.schedules && restored?.terminals) {
+      setStore(normalizeStoredStore({ ...restored, accounts: [] }));
     }
-    if (restoredSession?.userId) setCurrentUserId(restoredSession.userId);
-    setIsReady(true);
+    let cancelled = false;
+    void fetch('/api/auth/me', { cache: 'no-store', credentials: 'include' })
+      .then(async (response) => response.ok ? response.json() as Promise<{ user: Account }> : null)
+      .then((payload) => { if (!cancelled) setCurrentUser(payload?.user ?? null); })
+      .catch(() => { if (!cancelled) setCurrentUser(null); })
+      .finally(() => { if (!cancelled) setIsReady(true); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -398,7 +379,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
       try {
         const updated = JSON.parse(event.newValue) as StoredTransitStore;
         if (updated.accounts && updated.routes && updated.schedules && updated.terminals) {
-          setStore(normalizeStoredStore(updated));
+          setStore((current) => ({ ...normalizeStoredStore(updated), accounts: current.accounts }));
         }
       } catch {
         // Ignore malformed storage events and retain the last valid state.
@@ -441,7 +422,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
             contact: acceptRemotePublicState ? (publicState?.contact ?? current.contact) : current.contact,
             activeTrips: Array.isArray(remoteTrips) ? remoteTrips : current.activeTrips,
           };
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...next, accounts: [] }));
           return next;
         });
       } catch {
@@ -457,10 +438,10 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     };
   }, []);
 
-  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore, syncPublic = false, syncAccounts = false) => {
+  const replaceStore = useCallback((updater: (current: TransitStore) => TransitStore, syncPublic = false, _syncAccounts = false) => {
     setStore((current) => {
       const next = updater(current);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...next, accounts: [] }));
 
       if (syncPublic) {
         const writeVersion = ++publicWriteVersionRef.current;
@@ -477,77 +458,89 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
           });
       }
 
-      if (syncAccounts) void publishAccounts(next.accounts);
       return next;
     });
   }, []);
 
-  const currentUser = useMemo(() => {
-    const account = store.accounts.find((item) => item.id === currentUserId);
-    if (!account) return null;
-    const { passwordHash: _passwordHash, ...user } = account;
-    return user;
-  }, [currentUserId, store.accounts]);
-
   const login = useCallback(async (username: string, password: string) => {
-    const passwordHash = await digestPassword(password);
-    const account = store.accounts.find((item) => item.username.toLowerCase() === username.toLowerCase() && item.passwordHash === passwordHash && item.active);
-    if (!account) return null;
-    setCurrentUserId(account.id);
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: account.id }));
-    return account.role;
-  }, [store.accounts]);
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const payload = await response.json().catch(() => ({})) as { user?: Account };
+      if (!response.ok || !payload.user) return null;
+      setCurrentUser(payload.user);
+      return payload.user.role;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const logout = useCallback(() => {
-    setCurrentUserId(null);
-    localStorage.removeItem(SESSION_KEY);
+    setCurrentUser(null);
+    void fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
   }, []);
 
   const createDriver = useCallback(async ({ displayName, username, password }: { displayName: string; username: string; password: string }) => {
-    const normalizedUsername = username.trim().toLowerCase();
-    if (normalizedUsername.length < 4) return { ok: false, error: 'Username must contain at least 4 characters.' };
-    if (password.length < 8) return { ok: false, error: 'Password must contain at least 8 characters.' };
-    if (store.accounts.some((account) => account.username.toLowerCase() === normalizedUsername)) return { ok: false, error: 'This username is already in use.' };
-    const passwordHash = await digestPassword(password);
-    replaceStore((current) => ({
-      ...current,
-      accounts: [...current.accounts, { id: createId('driver'), username: normalizedUsername, displayName: displayName.trim() || normalizedUsername, role: 'driver', passwordHash, active: true }],
-    }), false, true);
-    return { ok: true };
-  }, [replaceStore, store.accounts]);
+    if (username.trim().length < 4) return { ok: false, error: 'Username must contain at least 4 characters.' };
+    if (password.length < 10) return { ok: false, error: 'Password must contain at least 10 characters.' };
+    try {
+      const response = await fetch('/api/admin/drivers', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName, username, password }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; account?: Account; error?: string };
+      if (!response.ok || !payload.account) return { ok: false, error: payload.error || 'Unable to create the driver account.' };
+      replaceStore((current) => ({ ...current, accounts: [...current.accounts.filter((account) => account.id !== payload.account!.id), payload.account!] }));
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Unable to reach the server.' };
+    }
+  }, [replaceStore]);
 
   const deleteDriver = useCallback((driverId: string) => {
-    replaceStore((current) => ({
-      ...current,
-      accounts: current.accounts.filter((account) => account.id !== driverId || account.role !== 'driver'),
-      activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
-    }), false, true);
-
-    // Remove the driver's shared live trip immediately so the passenger map
-    // cannot restore the deleted driver's marker on the next server poll.
-    void deletePublishedTrip(driverId);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/admin/drivers/${encodeURIComponent(driverId)}`, { method: 'DELETE', credentials: 'include' });
+        if (!response.ok) return;
+        replaceStore((current) => ({
+          ...current,
+          accounts: current.accounts.filter((account) => account.id !== driverId),
+          activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
+        }));
+      } catch {
+        // Keep current UI state when the server rejects or cannot complete deletion.
+      }
+    })();
   }, [replaceStore]);
 
   const removeLiveLocation = useCallback(async (driverId: string) => {
     const result = await deletePublishedTrip(driverId);
     if (!result.ok) return result;
-
-    replaceStore((current) => ({
-      ...current,
-      activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId),
-    }), false, false);
-
+    replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.filter((trip) => trip.driverId !== driverId) }));
     return { ok: true };
   }, [replaceStore]);
 
   const setAdminPassword = useCallback(async (currentPassword: string, newPassword: string) => {
-    if (newPassword.length < 10) return { ok: false, error: 'Use at least 10 characters for the new password.' };
-    const admin = store.accounts.find((account) => account.role === 'admin');
-    if (!admin || admin.passwordHash !== await digestPassword(currentPassword)) return { ok: false, error: 'Your current password is incorrect.' };
-    const passwordHash = await digestPassword(newPassword);
-    replaceStore((current) => ({ ...current, accounts: current.accounts.map((account) => account.id === admin.id ? { ...account, passwordHash } : account) }), false, true);
-    return { ok: true };
-  }, [replaceStore, store.accounts]);
+    if (newPassword.length < 12) return { ok: false, error: 'Use at least 12 characters for the new password.' };
+    try {
+      const response = await fetch('/api/admin/password', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      return response.ok ? { ok: true } : { ok: false, error: payload.error || 'Unable to update the password.' };
+    } catch {
+      return { ok: false, error: 'Unable to reach the server.' };
+    }
+  }, []);
 
   const addRoute = useCallback((input: Omit<TransitRoute, 'id'>) => {
     replaceStore((current) => ({ ...current, routes: [...current.routes, { ...input, id: createId('route') }] }), true);
@@ -633,6 +626,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
       try {
         const response = await fetch(`/api/announcement-images/${encodeURIComponent(id)}`, {
           method: 'PUT',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ dataUrl: imageDataUrl }),
         });
@@ -651,7 +645,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
 
   const deleteAnnouncement = useCallback((announcementId: string) => {
     replaceStore((current) => ({ ...current, announcements: current.announcements.filter((announcement) => announcement.id !== announcementId) }), true);
-    void fetch(`/api/announcement-images/${encodeURIComponent(announcementId)}`, { method: 'DELETE' }).catch(() => undefined);
+    void fetch(`/api/announcement-images/${encodeURIComponent(announcementId)}`, { method: 'DELETE', credentials: 'include' }).catch(() => undefined);
   }, [replaceStore]);
 
   const toggleAnnouncement = useCallback((announcementId: string) => {

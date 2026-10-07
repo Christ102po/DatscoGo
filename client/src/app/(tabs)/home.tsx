@@ -46,8 +46,8 @@ export default function HomeTabScreen() {
   const [isRequestingLocation, setIsRequestingLocation] = useState(false);
 
   // Restore the authenticated workspace after the installed app/PWA is closed and reopened.
-  // TransitContext already persists the signed-in account in localStorage; this keeps the
-  // visible workspace in sync with that restored session instead of defaulting to passenger.
+  // TransitContext restores the server-side HttpOnly cookie session; this keeps the
+  // visible workspace in sync without storing authentication tokens in localStorage.
   useEffect(() => {
     if (!isReady) return;
 

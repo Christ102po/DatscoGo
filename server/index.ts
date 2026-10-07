@@ -3,22 +3,73 @@ import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import postgres from "postgres";
-import { randomUUID } from "crypto";
+import { pbkdf2 as pbkdf2Callback, randomBytes, randomUUID, timingSafeEqual, createHash } from "crypto";
+import { promisify } from "util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 type JsonObject = Record<string, unknown>;
 
-const DEFAULT_ADMIN = {
+const LEGACY_PASSWORD_SALT = "datscogo-v1:";
+const DEFAULT_ADMIN_PROFILE = {
   id: "admin-1",
   username: "admin123",
   displayName: "DatscoGo Administrator",
-  role: "admin",
-  passwordHash:
-    "f23f36eba2232bf1ca13855cb58386c1fbe29e884bc2ce0a646db4d60656c204",
+  role: "admin" as const,
   active: true,
 };
+
+const pbkdf2 = promisify(pbkdf2Callback);
+const PASSWORD_ITERATIONS = 210_000;
+const SESSION_COOKIE = "datscogo_session";
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
+type AuthUser = { id: string; username: string; displayName: string; role: "admin" | "driver"; active: boolean };
+
+async function hashPassword(password: string) {
+  const salt = randomBytes(16).toString("hex");
+  const digest = await pbkdf2(password, salt, PASSWORD_ITERATIONS, 32, "sha512");
+  return `pbkdf2_sha512$${PASSWORD_ITERATIONS}$${salt}$${Buffer.from(digest).toString("hex")}`;
+}
+
+async function verifyPassword(password: string, encoded: string) {
+  if (encoded.startsWith("legacy_sha256$")) {
+    const expected = encoded.slice("legacy_sha256$".length);
+    const actual = createHash("sha256").update(`${LEGACY_PASSWORD_SALT}${password}`).digest("hex");
+    return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
+  }
+  const [scheme, iterationsRaw, salt, expectedHex] = encoded.split("$");
+  if (scheme !== "pbkdf2_sha512" || !iterationsRaw || !salt || !expectedHex) return false;
+  const iterations = Number(iterationsRaw);
+  if (!Number.isInteger(iterations) || iterations < 100_000 || expectedHex.length !== 64) return false;
+  const actual = Buffer.from(await pbkdf2(password, salt, iterations, 32, "sha512"));
+  const expected = Buffer.from(expectedHex, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function parseCookies(header: string | undefined) {
+  const result: Record<string, string> = {};
+  for (const part of (header ?? "").split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    result[decodeURIComponent(part.slice(0, index).trim())] = decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return result;
+}
+
+function sessionCookie(value: string, secure: boolean, maxAgeSeconds = 0) {
+  const parts = [`${SESSION_COOKIE}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", secure ? "SameSite=None" : "SameSite=Lax"];
+  if (secure) parts.push("Secure");
+  if (maxAgeSeconds > 0) parts.push(`Max-Age=${maxAgeSeconds}`);
+  else parts.push("Max-Age=0");
+  return parts.join("; ");
+}
+
+function safeLog(label: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(label, message.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, "[redacted-database-url]").replace(/(sk-[A-Za-z0-9_-]+)/g, "[redacted-secret]"));
+}
 
 const EMPTY_PUBLIC_STATE = {
   routes: [],
@@ -128,6 +179,51 @@ async function startServer() {
   `;
 
   await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_accounts (
+      id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin', 'driver')),
+      password_hash TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS datscogo_sessions (
+      session_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES datscogo_accounts(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+
+  // PostgreSQL row-level security is enabled for credential/session rows.
+  // The API never exposes password hashes or raw session tokens.
+  await sql`ALTER TABLE datscogo_accounts ENABLE ROW LEVEL SECURITY`;
+  await sql`ALTER TABLE datscogo_sessions ENABLE ROW LEVEL SECURITY`;
+  await sql`ALTER TABLE datscogo_live_trips ENABLE ROW LEVEL SECURITY`;
+
+  // Policies provide a database-level ownership boundary for deployments that
+  // connect through a non-owner PostgreSQL role and set datscogo.user_id/role.
+  await sql`DROP POLICY IF EXISTS datscogo_accounts_rls ON datscogo_accounts`;
+  await sql`CREATE POLICY datscogo_accounts_rls ON datscogo_accounts
+    USING (current_setting('datscogo.role', true) = 'admin' OR id = current_setting('datscogo.user_id', true))
+    WITH CHECK (current_setting('datscogo.role', true) = 'admin' OR id = current_setting('datscogo.user_id', true))`;
+  await sql`DROP POLICY IF EXISTS datscogo_sessions_rls ON datscogo_sessions`;
+  await sql`CREATE POLICY datscogo_sessions_rls ON datscogo_sessions
+    USING (current_setting('datscogo.role', true) = 'admin' OR user_id = current_setting('datscogo.user_id', true))
+    WITH CHECK (current_setting('datscogo.role', true) = 'admin' OR user_id = current_setting('datscogo.user_id', true))`;
+  await sql`DROP POLICY IF EXISTS datscogo_live_trips_select_rls ON datscogo_live_trips`;
+  await sql`CREATE POLICY datscogo_live_trips_select_rls ON datscogo_live_trips FOR SELECT USING (TRUE)`;
+  await sql`DROP POLICY IF EXISTS datscogo_live_trips_write_rls ON datscogo_live_trips`;
+  await sql`CREATE POLICY datscogo_live_trips_write_rls ON datscogo_live_trips FOR ALL
+    USING (current_setting('datscogo.role', true) = 'admin' OR driver_id = current_setting('datscogo.user_id', true))
+    WITH CHECK (current_setting('datscogo.role', true) = 'admin' OR driver_id = current_setting('datscogo.user_id', true))`;
+
+  await sql`
     CREATE TABLE IF NOT EXISTS datscogo_trip_history (
       trip_id TEXT PRIMARY KEY,
       driver_id TEXT NOT NULL,
@@ -138,6 +234,12 @@ async function startServer() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+
+  await sql`ALTER TABLE datscogo_trip_history ENABLE ROW LEVEL SECURITY`;
+  await sql`DROP POLICY IF EXISTS datscogo_trip_history_rls ON datscogo_trip_history`;
+  await sql`CREATE POLICY datscogo_trip_history_rls ON datscogo_trip_history
+    USING (current_setting('datscogo.role', true) = 'admin' OR driver_id = current_setting('datscogo.user_id', true))
+    WITH CHECK (current_setting('datscogo.role', true) = 'admin' OR driver_id = current_setting('datscogo.user_id', true))`;
 
   // Preserve any completed live trips that existed before trip history was added.
   await sql`
@@ -169,29 +271,185 @@ async function startServer() {
     ON CONFLICT (state_key) DO NOTHING
   `;
 
-  await sql`
-    INSERT INTO datscogo_app_state (state_key, state_value)
-    VALUES ('accounts', ${sql.json([DEFAULT_ADMIN])})
-    ON CONFLICT (state_key) DO NOTHING
+  const legacyAccountRows = await sql`
+    SELECT state_value FROM datscogo_app_state WHERE state_key = 'accounts' LIMIT 1
   `;
+  const legacyAccounts = Array.isArray(legacyAccountRows[0]?.state_value)
+    ? legacyAccountRows[0].state_value
+    : [];
+
+  for (const candidate of legacyAccounts) {
+    if (!validObject(candidate)) continue;
+    const id = String(candidate.id || "").trim();
+    const username = String(candidate.username || "").trim().toLowerCase();
+    const displayName = String(candidate.displayName || username).trim();
+    const role = candidate.role === "admin" ? "admin" : candidate.role === "driver" ? "driver" : null;
+    let passwordHash = String(candidate.passwordHash || "").trim();
+    if (passwordHash && !passwordHash.includes("$")) passwordHash = `legacy_sha256$${passwordHash}`;
+    if (!id || !username || !role || !passwordHash) continue;
+    await sql`
+      INSERT INTO datscogo_accounts (id, username, display_name, role, password_hash, active, updated_at)
+      VALUES (${id}, ${username}, ${displayName}, ${role}, ${passwordHash}, ${candidate.active !== false}, NOW())
+      ON CONFLICT (id) DO NOTHING
+    `;
+  }
+
+  const adminRows = await sql`SELECT id FROM datscogo_accounts WHERE role = 'admin' LIMIT 1`;
+  if (!adminRows[0]) {
+    const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD || "";
+    const initialAdminUsername = (process.env.INITIAL_ADMIN_USERNAME || DEFAULT_ADMIN_PROFILE.username).trim().toLowerCase();
+    if (initialAdminPassword.length < 12) {
+      throw new Error("INITIAL_ADMIN_PASSWORD must be set to at least 12 characters for a fresh DatscoGo deployment.");
+    }
+    const passwordHash = await hashPassword(initialAdminPassword);
+    await sql`
+      INSERT INTO datscogo_accounts (id, username, display_name, role, password_hash, active)
+      VALUES (${DEFAULT_ADMIN_PROFILE.id}, ${initialAdminUsername}, ${DEFAULT_ADMIN_PROFILE.displayName}, ${DEFAULT_ADMIN_PROFILE.role}, ${passwordHash}, TRUE)
+    `;
+  }
+
+  // Remove the old JSON credential blob after migration so password hashes are no longer mixed into app state.
+  await sql`DELETE FROM datscogo_app_state WHERE state_key = 'accounts'`;
 
   const app = express();
   const server = createServer(app);
+  app.disable("x-powered-by");
 
   app.use(express.json({ limit: "6mb" }));
+
+  const configuredOrigins = new Set(
+    (process.env.ALLOWED_ORIGINS || process.env.APP_ORIGIN || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+  if (process.env.NODE_ENV !== "production") {
+    configuredOrigins.add("http://localhost:3000");
+    configuredOrigins.add("http://localhost:5173");
+    configuredOrigins.add("capacitor://localhost");
+  }
+
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+    const protocol = forwardedProto || req.protocol;
+    const host = req.get("host");
+    const sameOrigin = Boolean(origin && host && origin === `${protocol}://${host}`);
+    const allowedOrigin = Boolean(origin && (sameOrigin || configuredOrigins.has(origin)));
+
+    if (origin && allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    }
+    if (req.method === "OPTIONS") return allowedOrigin ? res.sendStatus(204) : res.sendStatus(403);
+    if (origin && !allowedOrigin) return res.status(403).json({ error: "Origin not allowed." });
+    next();
+  });
+
+  async function getAuthUser(req: express.Request): Promise<AuthUser | null> {
+    const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    if (!rawToken) return null;
+    const sessionHash = createHash("sha256").update(rawToken).digest("hex");
+    const rows = await sql`
+      SELECT a.id, a.username, a.display_name, a.role, a.active
+      FROM datscogo_sessions s
+      JOIN datscogo_accounts a ON a.id = s.user_id
+      WHERE s.session_hash = ${sessionHash}
+        AND s.expires_at > NOW()
+        AND a.active = TRUE
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    return { id: row.id, username: row.username, displayName: row.display_name, role: row.role, active: row.active };
+  }
+
+  const requireRole = (...roles: AuthUser["role"][]) => async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const user = await getAuthUser(req);
+      if (!user) return res.status(401).json({ error: "Authentication required." });
+      if (!roles.includes(user.role)) return res.status(403).json({ error: "You do not have permission to perform this action." });
+      res.locals.authUser = user;
+      next();
+    } catch (error) {
+      safeLog("Authentication check failed:", error);
+      res.status(500).json({ error: "Unable to verify your session." });
+    }
+  };
 
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
-    res.setHeader("X-XSS-Protection", "1; mode=block");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("Permissions-Policy", "geolocation=(self), camera=(), microphone=()");
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
 
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self' https://*.openstreetmap.org https://cdnjs.cloudflare.com https://images.unsplash.com https://*.tile.openstreetmap.org https://www.google.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; img-src 'self' data: https: http:; connect-src 'self' https://*.openstreetmap.org https://router.project-osrm.org;"
+      "default-src 'self' https://*.openstreetmap.org https://cdnjs.cloudflare.com https://images.unsplash.com https://*.tile.openstreetmap.org https://www.google.com; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' https://*.openstreetmap.org https://router.project-osrm.org;"
     );
 
     next();
+  });
+
+  // --------------------------------------------------
+  // SERVER-SIDE AUTHENTICATION
+  // --------------------------------------------------
+
+  app.post("/api/auth/login", async (req, res) => {
+    const username = validObject(req.body) && typeof req.body.username === "string" ? req.body.username.trim().toLowerCase() : "";
+    const password = validObject(req.body) && typeof req.body.password === "string" ? req.body.password : "";
+    if (!username || !password || password.length > 256) return res.status(400).json({ error: "Invalid credentials." });
+    try {
+      const rows = await sql`SELECT id, username, display_name, role, password_hash, active FROM datscogo_accounts WHERE lower(username) = ${username} LIMIT 1`;
+      const account = rows[0];
+      if (!account || !account.active || !(await verifyPassword(password, account.password_hash))) {
+        return res.status(401).json({ error: "Invalid credentials." });
+      }
+      if (String(account.password_hash).startsWith("legacy_sha256$")) {
+        const upgraded = await hashPassword(password);
+        await sql`UPDATE datscogo_accounts SET password_hash = ${upgraded}, updated_at = NOW() WHERE id = ${account.id}`;
+      }
+      const token = randomBytes(32).toString("base64url");
+      const sessionHash = createHash("sha256").update(token).digest("hex");
+      await sql`DELETE FROM datscogo_sessions WHERE expires_at <= NOW()`;
+      await sql`INSERT INTO datscogo_sessions (session_hash, user_id, expires_at) VALUES (${sessionHash}, ${account.id}, NOW() + INTERVAL '12 hours')`;
+      res.setHeader("Set-Cookie", sessionCookie(token, process.env.NODE_ENV === "production", Math.floor(SESSION_TTL_MS / 1000)));
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ user: { id: account.id, username: account.username, displayName: account.display_name, role: account.role, active: account.active } });
+    } catch (error) {
+      safeLog("Login failed:", error);
+      res.status(500).json({ error: "Unable to sign in." });
+    }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    try {
+      const user = await getAuthUser(req);
+      res.setHeader("Cache-Control", "no-store");
+      if (!user) return res.status(401).json({ user: null });
+      res.json({ user });
+    } catch (error) {
+      safeLog("Session read failed:", error);
+      res.status(500).json({ user: null });
+    }
+  });
+
+  app.post("/api/auth/logout", async (req, res) => {
+    try {
+      const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      if (token) {
+        const sessionHash = createHash("sha256").update(token).digest("hex");
+        await sql`DELETE FROM datscogo_sessions WHERE session_hash = ${sessionHash}`;
+      }
+    } catch (error) {
+      safeLog("Logout cleanup failed:", error);
+    }
+    res.setHeader("Set-Cookie", sessionCookie("", process.env.NODE_ENV === "production"));
+    res.json({ ok: true });
   });
 
   // --------------------------------------------------
@@ -207,7 +465,7 @@ async function startServer() {
         storage: "postgresql",
       });
     } catch (error) {
-      console.error("PostgreSQL health check failed:", error);
+      safeLog("PostgreSQL health check failed:", error);
 
       res.status(503).json({
         ok: false,
@@ -233,7 +491,7 @@ async function startServer() {
 
       res.json(rows[0]?.state_value ?? EMPTY_PUBLIC_STATE);
     } catch (error) {
-      console.error("Read public state failed:", error);
+      safeLog("Read public state failed:", error);
 
       res.status(500).json({
         error: "Unable to read shared transit data.",
@@ -241,7 +499,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/public-state", async (req, res) => {
+  app.put("/api/public-state", requireRole("admin"), async (req, res) => {
     if (!validObject(req.body)) {
       return res.status(400).json({
         ok: false,
@@ -269,7 +527,7 @@ async function startServer() {
 
       res.json({ ok: true });
     } catch (error) {
-      console.error("Write public state failed:", error);
+      safeLog("Write public state failed:", error);
 
       res.status(500).json({
         ok: false,
@@ -282,7 +540,7 @@ async function startServer() {
   // ANNOUNCEMENT IMAGES
   // --------------------------------------------------
 
-  app.put('/api/announcement-images/:announcementId', async (req, res) => {
+  app.put('/api/announcement-images/:announcementId', requireRole("admin"), async (req, res) => {
     const announcementId = String(req.params.announcementId || '').trim();
     const dataUrl = validObject(req.body) && typeof req.body.dataUrl === 'string' ? req.body.dataUrl : '';
     const match = /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
@@ -303,7 +561,7 @@ async function startServer() {
       `;
       res.json({ ok: true });
     } catch (error) {
-      console.error('Announcement image upload failed:', error);
+      safeLog('Announcement image upload failed:', error);
       res.status(500).json({ ok: false, error: 'Unable to save the announcement image.' });
     }
   });
@@ -321,17 +579,17 @@ async function startServer() {
       res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
       res.send(rows[0].image_data);
     } catch (error) {
-      console.error('Announcement image read failed:', error);
+      safeLog('Announcement image read failed:', error);
       res.status(500).end();
     }
   });
 
-  app.delete('/api/announcement-images/:announcementId', async (req, res) => {
+  app.delete('/api/announcement-images/:announcementId', requireRole("admin"), async (req, res) => {
     try {
       await sql`DELETE FROM datscogo_announcement_images WHERE announcement_id = ${String(req.params.announcementId || '')}`;
       res.json({ ok: true });
     } catch (error) {
-      console.error('Announcement image delete failed:', error);
+      safeLog('Announcement image delete failed:', error);
       res.status(500).json({ ok: false, error: 'Unable to remove the announcement image.' });
     }
   });
@@ -389,13 +647,13 @@ async function startServer() {
       `;
       res.json({ ok: true, reportId });
     } catch (error) {
-      console.error('Create driver report failed:', error);
+      safeLog('Create driver report failed:', error);
       await sql`DELETE FROM datscogo_driver_report_images WHERE report_id = ${reportId}`.catch(() => undefined);
       res.status(500).json({ ok: false, error: 'Unable to submit the report right now.' });
     }
   });
 
-  app.get('/api/driver-reports', async (_req, res) => {
+  app.get('/api/driver-reports', requireRole("admin"), async (_req, res) => {
     try {
       const rows = await sql`
         SELECT report_id, report_value, created_at, updated_at
@@ -411,12 +669,12 @@ async function startServer() {
         photoUrl: row.report_value?.hasPhoto ? `/api/driver-report-images/${encodeURIComponent(row.report_id)}` : undefined,
       })));
     } catch (error) {
-      console.error('Read driver reports failed:', error);
+      safeLog('Read driver reports failed:', error);
       res.status(500).json({ error: 'Unable to read passenger reports.' });
     }
   });
 
-  app.patch('/api/driver-reports/:reportId', async (req, res) => {
+  app.patch('/api/driver-reports/:reportId', requireRole("admin"), async (req, res) => {
     const reportId = String(req.params.reportId || '').trim();
     const status = validObject(req.body) && (req.body.status === 'open' || req.body.status === 'reviewed') ? req.body.status : null;
     if (!reportId || !status) return res.status(400).json({ ok: false, error: 'Invalid report update.' });
@@ -427,12 +685,12 @@ async function startServer() {
       await sql`UPDATE datscogo_driver_reports SET report_value = ${sql.json(next)}, updated_at = NOW() WHERE report_id = ${reportId}`;
       res.json({ ok: true });
     } catch (error) {
-      console.error('Update driver report failed:', error);
+      safeLog('Update driver report failed:', error);
       res.status(500).json({ ok: false, error: 'Unable to update the report.' });
     }
   });
 
-  app.delete('/api/driver-reports/:reportId', async (req, res) => {
+  app.delete('/api/driver-reports/:reportId', requireRole("admin"), async (req, res) => {
     const reportId = String(req.params.reportId || '').trim();
     if (!reportId) return res.status(400).json({ ok: false, error: 'Report ID is required.' });
     try {
@@ -442,12 +700,12 @@ async function startServer() {
       });
       res.json({ ok: true });
     } catch (error) {
-      console.error('Delete driver report failed:', error);
+      safeLog('Delete driver report failed:', error);
       res.status(500).json({ ok: false, error: 'Unable to delete the report.' });
     }
   });
 
-  app.get('/api/driver-report-images/:reportId', async (req, res) => {
+  app.get('/api/driver-report-images/:reportId', requireRole("admin"), async (req, res) => {
     try {
       const rows = await sql`SELECT content_type, image_data FROM datscogo_driver_report_images WHERE report_id = ${String(req.params.reportId || '')} LIMIT 1`;
       if (!rows[0]) return res.status(404).end();
@@ -455,96 +713,83 @@ async function startServer() {
       res.setHeader('Cache-Control', 'private, max-age=3600');
       res.send(rows[0].image_data);
     } catch (error) {
-      console.error('Read driver report image failed:', error);
+      safeLog('Read driver report image failed:', error);
       res.status(500).end();
     }
   });
 
   // --------------------------------------------------
-  // SHARED ACCOUNTS
+  // ACCOUNTS (SANITIZED + ADMIN MUTATIONS)
   // --------------------------------------------------
 
-  app.get("/api/accounts", async (_req, res) => {
+  app.get("/api/accounts", async (req, res) => {
     try {
-      const rows = await sql`
-        SELECT state_value
-        FROM datscogo_app_state
-        WHERE state_key = 'accounts'
-        LIMIT 1
-      `;
-
-      const accounts = rows[0]?.state_value;
-
+      const user = await getAuthUser(req);
+      const rows = user?.role === "admin"
+        ? await sql`SELECT id, username, display_name, role, active FROM datscogo_accounts ORDER BY role, display_name`
+        : await sql`SELECT id, display_name, role, active FROM datscogo_accounts WHERE role = 'driver' AND active = TRUE ORDER BY display_name`;
       res.setHeader("Cache-Control", "no-store");
-
-      res.json(
-        Array.isArray(accounts)
-          ? accounts
-          : [DEFAULT_ADMIN]
-      );
+      res.json(rows.map((row) => ({
+        id: row.id,
+        ...(user?.role === "admin" ? { username: row.username } : {}),
+        displayName: row.display_name,
+        role: row.role,
+        active: row.active,
+      })));
     } catch (error) {
-      console.error("Read accounts failed:", error);
-
-      res.status(500).json({
-        error: "Unable to read shared accounts.",
-      });
+      safeLog("Read accounts failed:", error);
+      res.status(500).json({ error: "Unable to read accounts." });
     }
   });
 
-  app.put("/api/accounts", async (req, res) => {
-    if (!Array.isArray(req.body)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid accounts data.",
-      });
-    }
-
+  app.post("/api/admin/drivers", requireRole("admin"), async (req, res) => {
+    const displayName = validObject(req.body) && typeof req.body.displayName === "string" ? req.body.displayName.trim().slice(0, 120) : "";
+    const username = validObject(req.body) && typeof req.body.username === "string" ? req.body.username.trim().toLowerCase() : "";
+    const password = validObject(req.body) && typeof req.body.password === "string" ? req.body.password : "";
+    if (username.length < 4 || displayName.length < 2 || password.length < 10 || password.length > 256) return res.status(400).json({ ok: false, error: "Use a name, a 4+ character username, and a 10+ character password." });
     try {
-      await sql`
-        INSERT INTO datscogo_app_state (
-          state_key,
-          state_value,
-          updated_at
-        )
-        VALUES (
-          'accounts',
-          ${sql.json(req.body)},
-          NOW()
-        )
-        ON CONFLICT (state_key)
-        DO UPDATE SET
-          state_value = EXCLUDED.state_value,
-          updated_at = NOW()
-      `;
+      const id = `driver-${randomUUID()}`;
+      const passwordHash = await hashPassword(password);
+      await sql`INSERT INTO datscogo_accounts (id, username, display_name, role, password_hash, active) VALUES (${id}, ${username}, ${displayName}, 'driver', ${passwordHash}, TRUE)`;
+      res.status(201).json({ ok: true, account: { id, username, displayName, role: "driver", active: true } });
+    } catch (error: any) {
+      if (String(error?.code) === "23505") return res.status(409).json({ ok: false, error: "This username is already in use." });
+      safeLog("Create driver failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to create the driver account." });
+    }
+  });
 
-      // Keep live vehicle markers consistent with driver accounts. If a driver
-      // account is removed, any shared live trip for that driver is removed too.
-      const activeDriverIds = req.body
-        .filter((account: unknown) => validObject(account) && account.role === "driver" && account.active !== false)
-        .map((account: JsonObject) => String(account.id || "").trim())
-        .filter(Boolean);
-
-      const liveDriverRows = await sql`SELECT driver_id FROM datscogo_live_trips`;
-      const activeDriverIdSet = new Set(activeDriverIds);
-      const removedDriverIds = liveDriverRows
-        .map((row) => String(row.driver_id || "").trim())
-        .filter((driverId) => driverId && !activeDriverIdSet.has(driverId));
-
-      for (const removedDriverId of removedDriverIds) {
-        await sql`
-          DELETE FROM datscogo_live_trips
-          WHERE driver_id = ${removedDriverId}
-        `;
-      }
-
+  app.delete("/api/admin/drivers/:driverId", requireRole("admin"), async (req, res) => {
+    const driverId = String(req.params.driverId || "").trim();
+    if (!driverId) return res.status(400).json({ ok: false, error: "Driver ID is required." });
+    try {
+      await sql.begin(async (tx) => {
+        await tx`DELETE FROM datscogo_live_trips WHERE driver_id = ${driverId}`;
+        await tx`DELETE FROM datscogo_hidden_live_trips WHERE driver_id = ${driverId}`;
+        await tx`DELETE FROM datscogo_accounts WHERE id = ${driverId} AND role = 'driver'`;
+      });
       res.json({ ok: true });
     } catch (error) {
-      console.error("Write accounts failed:", error);
+      safeLog("Delete driver failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to delete the driver account." });
+    }
+  });
 
-      res.status(500).json({
-        ok: false,
-        error: "Unable to save shared accounts.",
-      });
+  app.patch("/api/admin/password", requireRole("admin"), async (req, res) => {
+    const currentPassword = validObject(req.body) && typeof req.body.currentPassword === "string" ? req.body.currentPassword : "";
+    const newPassword = validObject(req.body) && typeof req.body.newPassword === "string" ? req.body.newPassword : "";
+    if (newPassword.length < 12 || newPassword.length > 256) return res.status(400).json({ ok: false, error: "Use at least 12 characters for the new password." });
+    const user = res.locals.authUser as AuthUser;
+    try {
+      const rows = await sql`SELECT password_hash FROM datscogo_accounts WHERE id = ${user.id} LIMIT 1`;
+      if (!rows[0] || !(await verifyPassword(currentPassword, rows[0].password_hash))) return res.status(403).json({ ok: false, error: "Your current password is incorrect." });
+      const passwordHash = await hashPassword(newPassword);
+      await sql`UPDATE datscogo_accounts SET password_hash = ${passwordHash}, updated_at = NOW() WHERE id = ${user.id}`;
+      await sql`DELETE FROM datscogo_sessions WHERE user_id = ${user.id} AND session_hash <> ${createHash("sha256").update(parseCookies(req.headers.cookie)[SESSION_COOKIE] || "").digest("hex")}`;
+      res.json({ ok: true });
+    } catch (error) {
+      safeLog("Password update failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to update the administrator password." });
     }
   });
 
@@ -566,7 +811,7 @@ async function startServer() {
         rows.map((row) => row.trip_value)
       );
     } catch (error) {
-      console.error("Read trips failed:", error);
+      safeLog("Read trips failed:", error);
 
       res.status(500).json({
         error: "Unable to read live trips.",
@@ -574,7 +819,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/trips/:driverId", async (req, res) => {
+  app.delete("/api/trips/:driverId", requireRole("admin"), async (req, res) => {
     const driverId = String(req.params.driverId || "").trim();
     if (!driverId) {
       return res.status(400).json({ ok: false, error: "Invalid driver ID." });
@@ -606,14 +851,16 @@ async function startServer() {
       `;
       res.json({ ok: true });
     } catch (error) {
-      console.error("Delete live trip failed:", error);
+      safeLog("Delete live trip failed:", error);
       res.status(500).json({ ok: false, error: "Unable to remove the driver's live location." });
     }
   });
 
-  app.put("/api/trips/:driverId", async (req, res) => {
+  app.put("/api/trips/:driverId", requireRole("driver", "admin"), async (req, res) => {
     const driverId = String(req.params.driverId || "").trim();
     const incomingTrip = req.body;
+    const authUser = res.locals.authUser as AuthUser;
+    if (authUser.role === "driver" && authUser.id !== driverId) return res.status(403).json({ ok: false, error: "Drivers may update only their own live trip." });
 
     if (
       !driverId ||
@@ -626,19 +873,8 @@ async function startServer() {
     try {
       // Reject location updates from deleted/disabled driver accounts so a
       // stale driver session cannot recreate a marker after admin deletion.
-      const accountRows = await sql`
-        SELECT state_value
-        FROM datscogo_app_state
-        WHERE state_key = 'accounts'
-        LIMIT 1
-      `;
-      const accounts = accountRows[0]?.state_value;
-      const driverIsActive = Array.isArray(accounts) && accounts.some((account) =>
-        validObject(account) &&
-        String(account.id || "") === driverId &&
-        account.role === "driver" &&
-        account.active !== false
-      );
+      const accountRows = await sql`SELECT id FROM datscogo_accounts WHERE id = ${driverId} AND role = 'driver' AND active = TRUE LIMIT 1`;
+      const driverIsActive = Boolean(accountRows[0]);
 
       if (!driverIsActive) {
         await sql`DELETE FROM datscogo_live_trips WHERE driver_id = ${driverId}`;
@@ -751,12 +987,12 @@ async function startServer() {
 
       res.json({ ok: true, trip });
     } catch (error) {
-      console.error("Write trip failed:", error);
+      safeLog("Write trip failed:", error);
       res.status(500).json({ ok: false, error: "Unable to save live trip." });
     }
   });
 
-  app.patch("/api/trips/:driverId/safety", async (req, res) => {
+  app.patch("/api/trips/:driverId/safety", requireRole("driver", "admin"), async (req, res) => {
     const driverId = String(req.params.driverId || "").trim();
     const action = String(req.body?.action || "").trim();
     if (!driverId || !["cancel", "report", "resolve"].includes(action)) {
@@ -822,7 +1058,7 @@ async function startServer() {
       `;
       res.json({ ok: true, trip: cleaned });
     } catch (error) {
-      console.error("Trip safety action failed:", error);
+      safeLog("Trip safety action failed:", error);
       res.status(500).json({ ok: false, error: "Unable to update the driver safety alert." });
     }
   });
@@ -891,7 +1127,7 @@ async function startServer() {
         }
       }
     } catch (error) {
-      console.error("Driver safety watchdog failed:", error);
+      safeLog("Driver safety watchdog failed:", error);
     } finally {
       safetyWatchdogRunning = false;
     }
@@ -904,7 +1140,7 @@ async function startServer() {
   // DRIVER TRIP HISTORY
   // --------------------------------------------------
 
-  app.get("/api/trip-records", async (_req, res) => {
+  app.get("/api/trip-records", requireRole("admin"), async (_req, res) => {
     try {
       const rows = await sql`
         SELECT trip_id, driver_id, route_id, trip_value, started_at, arrived_at, updated_at
@@ -923,12 +1159,12 @@ async function startServer() {
         lastUpdated: new Date(row.updated_at).getTime(),
       })));
     } catch (error) {
-      console.error("Read trip history failed:", error);
+      safeLog("Read trip history failed:", error);
       res.status(500).json({ error: "Unable to read driver trip records." });
     }
   });
 
-  app.delete("/api/trip-records/:tripId", async (req, res) => {
+  app.delete("/api/trip-records/:tripId", requireRole("admin"), async (req, res) => {
     const tripId = String(req.params.tripId || "").trim();
     if (!tripId) return res.status(400).json({ ok: false, error: "Trip ID is required." });
 
@@ -936,17 +1172,17 @@ async function startServer() {
       await sql`DELETE FROM datscogo_trip_history WHERE trip_id = ${tripId}`;
       res.json({ ok: true });
     } catch (error) {
-      console.error("Delete trip history failed:", error);
+      safeLog("Delete trip history failed:", error);
       res.status(500).json({ ok: false, error: "Unable to delete the trip record." });
     }
   });
 
-  app.delete("/api/trip-records", async (_req, res) => {
+  app.delete("/api/trip-records", requireRole("admin"), async (_req, res) => {
     try {
       await sql`DELETE FROM datscogo_trip_history`;
       res.json({ ok: true });
     } catch (error) {
-      console.error("Delete all trip history failed:", error);
+      safeLog("Delete all trip history failed:", error);
       res.status(500).json({ ok: false, error: "Unable to delete all trip records." });
     }
   });
@@ -995,10 +1231,6 @@ async function startServer() {
 }
 
 startServer().catch((error) => {
-  console.error(
-    "DatscoGo startup failed:",
-    error
-  );
-
+  safeLog("DatscoGo startup failed:", error);
   process.exit(1);
 });

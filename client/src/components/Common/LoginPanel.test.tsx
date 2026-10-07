@@ -11,7 +11,5 @@ describe('LoginPanel', () => {
 
     expect(html).toContain('Username');
     expect(html).toContain('Password');
-    expect(html).toContain('admin123');
-    expect(html).toContain('Change this starter password');
   });
 });
