@@ -27,11 +27,24 @@ const MapClickListener: React.FC<TerminalLocationPickerProps> = ({ value, onChan
   return value ? <Marker position={[value.latitude, value.longitude]} icon={selectedLocationIcon} /> : null;
 };
 
+const ResizeMap: React.FC = () => {
+  const map = useMap();
+  useEffect(() => {
+    const refresh = () => map.invalidateSize({ pan: false });
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(refresh) : null;
+    observer?.observe(map.getContainer());
+    refresh();
+    return () => observer?.disconnect();
+  }, [map]);
+  return null;
+};
+
 export const TerminalLocationPicker: React.FC<TerminalLocationPickerProps> = ({ value, onChange, label = 'terminal' }) => (
   <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
     <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2"><p className="text-xs font-bold text-slate-700">Click on Siargao to place the {label}</p><span className="text-[10px] font-semibold text-blue-600">{value ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : 'No pin selected'}</span></div>
     <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-64 w-full sm:h-72" attributionControl>
-      <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" maxZoom={18} attribution="Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors" />
+      <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" subdomains="abcd" maxZoom={19} attribution="&copy; OpenStreetMap contributors &copy; CARTO" />
+      <ResizeMap />
       <MapClickListener value={value} onChange={onChange} />
     </MapContainer>
   </div>

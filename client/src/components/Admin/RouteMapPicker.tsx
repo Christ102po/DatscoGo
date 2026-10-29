@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { MapContainer, Marker, Polyline, TileLayer, useMapEvents } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, TileLayer, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { RouteWaypoint, Terminal } from '../../contexts/TransitContext';
@@ -27,6 +27,20 @@ const waypointIcon = makeIcon('#64748b', '•');
 
 const MapClicker: React.FC<{ mode: SelectionMode; onMapClick: (point: RoutePoint) => void }> = ({ mode, onMapClick }) => {
   useMapEvents({ click: (event) => { if (mode === 'waypoint') onMapClick([event.latlng.lat, event.latlng.lng]); } });
+  return null;
+};
+
+// Recalculate Leaflet tile bounds when the admin panel changes size.
+const ResizeMap: React.FC = () => {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const refresh = () => map.invalidateSize({ pan: false });
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(refresh) : null;
+    observer?.observe(container);
+    refresh();
+    return () => observer?.disconnect();
+  }, [map]);
   return null;
 };
 
@@ -79,7 +93,8 @@ export const RouteMapPicker: React.FC<RouteMapPickerProps> = ({ terminals, origi
         </div>
       </div>
       <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-72 w-full sm:h-80" attributionControl>
-        <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" maxZoom={18} attribution="Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors" />
+        <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" subdomains="abcd" maxZoom={19} attribution="&copy; OpenStreetMap contributors &copy; CARTO" />
+        <ResizeMap />
         <MapClicker mode={mode} onMapClick={([latitude, longitude]) => onPointsChange([...points, { id: `waypoint-${Date.now()}-${points.length}`, latitude, longitude, label: '', regularFare: null, studentFare: null, seniorCitizenFare: null }])} />
         {roadLine.length >= 2 && <Polyline positions={roadLine} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.85 }} />}
         {terminals.map((terminal) => {
