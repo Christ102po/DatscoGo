@@ -79,7 +79,7 @@ export const RouteMapPicker: React.FC<RouteMapPickerProps> = ({ terminals, origi
         </div>
       </div>
       <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-72 w-full sm:h-80" attributionControl>
-        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={18} attribution="&copy; OpenStreetMap contributors" />
+        <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" maxZoom={18} attribution="Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors" />
         <MapClicker mode={mode} onMapClick={([latitude, longitude]) => onPointsChange([...points, { id: `waypoint-${Date.now()}-${points.length}`, latitude, longitude, label: '', regularFare: null, studentFare: null, seniorCitizenFare: null }])} />
         {roadLine.length >= 2 && <Polyline positions={roadLine} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.85 }} />}
         {terminals.map((terminal) => {

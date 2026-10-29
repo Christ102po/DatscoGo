@@ -31,7 +31,7 @@ export const TerminalLocationPicker: React.FC<TerminalLocationPickerProps> = ({ 
   <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
     <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2"><p className="text-xs font-bold text-slate-700">Click on Siargao to place the {label}</p><span className="text-[10px] font-semibold text-blue-600">{value ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : 'No pin selected'}</span></div>
     <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-64 w-full sm:h-72" attributionControl>
-      <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={18} attribution="&copy; OpenStreetMap contributors" />
+      <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}" maxZoom={18} attribution="Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors" />
       <MapClickListener value={value} onChange={onChange} />
     </MapContainer>
   </div>
