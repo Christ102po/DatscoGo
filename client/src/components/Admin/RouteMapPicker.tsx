@@ -93,7 +93,7 @@ export const RouteMapPicker: React.FC<RouteMapPickerProps> = ({ terminals, origi
         </div>
       </div>
       <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-72 w-full sm:h-80" attributionControl>
-        <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" subdomains="abcd" maxZoom={19} attribution="&copy; OpenStreetMap contributors &copy; CARTO" />
+        <TileLayer url={'https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=' + encodeURIComponent(import.meta.env.VITE_MAPTILER_API_KEY || '')} subdomains="abcd" maxZoom={19} attribution="&copy; MapTiler &copy; OpenStreetMap contributors" />
         <ResizeMap />
         <MapClicker mode={mode} onMapClick={([latitude, longitude]) => onPointsChange([...points, { id: `waypoint-${Date.now()}-${points.length}`, latitude, longitude, label: '', regularFare: null, studentFare: null, seniorCitizenFare: null }])} />
         {roadLine.length >= 2 && <Polyline positions={roadLine} pathOptions={{ color: '#1d4ed8', weight: 5, opacity: 0.85 }} />}

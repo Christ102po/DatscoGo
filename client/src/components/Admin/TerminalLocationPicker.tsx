@@ -43,7 +43,7 @@ export const TerminalLocationPicker: React.FC<TerminalLocationPickerProps> = ({ 
   <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
     <div className="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2"><p className="text-xs font-bold text-slate-700">Click on Siargao to place the {label}</p><span className="text-[10px] font-semibold text-blue-600">{value ? `${value.latitude.toFixed(5)}, ${value.longitude.toFixed(5)}` : 'No pin selected'}</span></div>
     <MapContainer center={[9.815, 126.085]} zoom={11} scrollWheelZoom className="h-64 w-full sm:h-72" attributionControl>
-      <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" subdomains="abcd" maxZoom={19} attribution="&copy; OpenStreetMap contributors &copy; CARTO" />
+      <TileLayer url={'https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=' + encodeURIComponent(import.meta.env.VITE_MAPTILER_API_KEY || '')} subdomains="abcd" maxZoom={19} attribution="&copy; MapTiler &copy; OpenStreetMap contributors" />
       <ResizeMap />
       <MapClickListener value={value} onChange={onChange} />
     </MapContainer>
