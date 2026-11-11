@@ -751,6 +751,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     announcements,
     contact,
     createDriver,
+    updateDriverBusNumber,
     deleteDriver,
     removeLiveLocation,
     setAdminPassword,
@@ -784,7 +785,8 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [locationEnabled]);
-  const [driver, setDriver] = useState({ displayName: '', username: '', password: '' });
+  const [driver, setDriver] = useState({ displayName: '', username: '', password: '', busNumber: '' });
+  const [busNumberEdits, setBusNumberEdits] = useState<Record<string, string>>({});
   const [schedule, setSchedule] = useState({ routeId: routes[0]?.id ?? '', time: '', period: 'Morning' as 'Morning' | 'Afternoon', days: 'Monday – Saturday' });
   const [password, setPassword] = useState({ current: '', next: '' });
 
@@ -851,8 +853,16 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
     event.preventDefault();
     const result = await createDriver(driver);
     if (!result.ok) return inform(result.error ?? 'Unable to register driver.', true);
-    setDriver({ displayName: '', username: '', password: '' });
+    setDriver({ displayName: '', username: '', password: '', busNumber: '' });
     inform('Driver account registered.');
+  };
+
+  const saveBusNumber = async (driverId: string, currentBusNumber: string | null | undefined) => {
+    const busNumber = (busNumberEdits[driverId] ?? currentBusNumber ?? '').trim();
+    const result = await updateDriverBusNumber(driverId, busNumber);
+    if (!result.ok) return inform(result.error ?? 'Could not save bus number.', true);
+    setBusNumberEdits((current) => { const next = { ...current }; delete next[driverId]; return next; });
+    inform('Bus number updated.');
   };
 
   const createSchedule = (event: React.FormEvent) => {
@@ -992,8 +1002,9 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
 
         {section === 'drivers' && (
           <div className="grid gap-6 xl:grid-cols-[.8fr_1.2fr]">
-            <form onSubmit={createNewDriver} className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Register driver</h2><div className="mt-4 space-y-3"><input required value={driver.displayName} onChange={(event) => setDriver({ ...driver, displayName: event.target.value })} placeholder="Driver name" className={inputClass} /><input required value={driver.username} onChange={(event) => setDriver({ ...driver, username: event.target.value })} placeholder="Username" className={inputClass} /><input required type="password" value={driver.password} onChange={(event) => setDriver({ ...driver, password: event.target.value })} placeholder="Temporary password (10+ characters)" className={inputClass} /><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><Plus size={17} />Create driver account</button></div></form>
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Registered drivers</h2><div className="mt-4 divide-y divide-slate-100">{drivers.map((driverItem) => <div key={driverItem.id} className="flex items-center justify-between gap-3 py-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><BusFront size={18} /></span><div><p className="text-sm font-bold">{driverItem.displayName}</p><p className="text-xs text-slate-500">@{driverItem.username}</p></div></div><button type="button" onClick={() => void deleteDriverAccount(driverItem)} className="rounded-xl border border-red-200 p-2 text-red-600 transition hover:bg-red-50" aria-label={`Delete ${driverItem.displayName}`}><Trash2 size={17} /></button></div>)}</div></section>
+            <form onSubmit={createNewDriver} className="h-fit rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Register driver</h2><div className="mt-4 space-y-3"><input required value={driver.displayName} onChange={(event) => setDriver({ ...driver, displayName: event.target.value })} placeholder="Driver name" className={inputClass} /><input required value={driver.username} onChange={(event) => setDriver({ ...driver, username: event.target.value })} placeholder="Username" className={inputClass} /><input required maxLength={20} value={driver.busNumber} onChange={(event) => setDriver({ ...driver, busNumber: event.target.value })} placeholder="Bus number (e.g. DAT-001)" aria-label="Bus number" className={inputClass} /><input required type="password" value={driver.password} onChange={(event) => setDriver({ ...driver, password: event.target.value })} placeholder="Temporary password (10+ characters)" className={inputClass} /><button className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white hover:bg-blue-700"><Plus size={17} />Create driver account</button></div></form>
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="font-black">Registered drivers</h2><div className="mt-4 divide-y divide-slate-100">{drivers.map((driverItem) => <div key={driverItem.id} className="flex items-center justify-between gap-3 py-3"><div className="flex items-center gap-3"><span className="rounded-xl bg-blue-50 p-2.5 text-blue-600"><BusFront size={18} /></span><div><p className="text-sm font-bold">{driverItem.displayName}</p><p className="text-xs text-slate-500">@{driverItem.username}</p><p className="text-xs font-semibold text-blue-700">Bus: {driverItem.busNumber || 'Not assigned'}</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2"><input aria-label={`Bus number for ${driverItem.displayName}`} maxLength={20} value={busNumberEdits[driverItem.id] ?? driverItem.busNumber ?? ''} onChange={(event) => setBusNumberEdits((current) => ({ ...current, [driverItem.id]: event.target.value }))} placeholder="Assign bus number" className="w-32 rounded-lg border border-slate-300 px-2 py-1 text-xs" /><button type="button" onClick={() => void saveBusNumber(driverItem.id, driverItem.busNumber)} className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-bold text-white hover:bg-blue-700">Save bus</button></div></div></div><button type="button" onClick={() => void deleteDriverAccount(driverItem)} className="rounded-xl border border-red-200 p-2 text-red-600 transition hover:bg-red-50" aria-label={`Delete ${driverItem.displayName}`}><Trash2 size={17} /></button></div>)}</div></section>
           </div>
         )}
 

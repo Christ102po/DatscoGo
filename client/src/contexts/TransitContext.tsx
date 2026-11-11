@@ -7,6 +7,7 @@ export interface Account {
   id: string;
   username: string;
   displayName: string;
+  busNumber?: string | null;
   role: UserRole;
   active: boolean;
 }
@@ -147,7 +148,8 @@ interface TransitContextValue extends TransitStore {
   isReady: boolean;
   login: (username: string, password: string) => Promise<UserRole | null>;
   logout: () => void;
-  createDriver: (input: { displayName: string; username: string; password: string }) => Promise<{ ok: boolean; error?: string }>;
+  createDriver: (input: { displayName: string; username: string; password: string; busNumber: string }) => Promise<{ ok: boolean; error?: string }>;
+  updateDriverBusNumber: (driverId: string, busNumber: string) => Promise<{ ok: boolean; error?: string }>;
   deleteDriver: (driverId: string) => void;
   removeLiveLocation: (driverId: string) => Promise<{ ok: boolean; error?: string }>;
   setAdminPassword: (currentPassword: string, newPassword: string) => Promise<{ ok: boolean; error?: string }>;
@@ -484,7 +486,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     void fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
   }, []);
 
-  const createDriver = useCallback(async ({ displayName, username, password }: { displayName: string; username: string; password: string }) => {
+  const createDriver = useCallback(async ({ displayName, username, password, busNumber }: { displayName: string; username: string; password: string; busNumber: string }) => {
     if (username.trim().length < 4) return { ok: false, error: 'Username must contain at least 4 characters.' };
     if (password.length < 10) return { ok: false, error: 'Password must contain at least 10 characters.' };
     try {
@@ -492,11 +494,27 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName, username, password }),
+        body: JSON.stringify({ displayName, username, password, busNumber }),
       });
       const payload = await response.json().catch(() => ({})) as { ok?: boolean; account?: Account; error?: string };
       if (!response.ok || !payload.account) return { ok: false, error: payload.error || 'Unable to create the driver account.' };
       replaceStore((current) => ({ ...current, accounts: [...current.accounts.filter((account) => account.id !== payload.account!.id), payload.account!] }));
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Unable to reach the server.' };
+    }
+  }, [replaceStore]);
+
+  const updateDriverBusNumber = useCallback(async (driverId: string, busNumber: string) => {
+    try {
+      const response = await fetch(`/api/admin/drivers/${encodeURIComponent(driverId)}/bus-number`, {
+        method: 'PATCH', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ busNumber }),
+      });
+      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; busNumber?: string };
+      if (!response.ok || !payload.ok) return { ok: false, error: payload.error || 'Unable to update bus number.' };
+      replaceStore((current) => ({ ...current, accounts: current.accounts.map((account) => account.id === driverId ? { ...account, busNumber: payload.busNumber } : account) }));
       return { ok: true };
     } catch {
       return { ok: false, error: 'Unable to reach the server.' };
@@ -743,6 +761,7 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     login,
     logout,
     createDriver,
+    updateDriverBusNumber,
     deleteDriver,
     removeLiveLocation,
     setAdminPassword,
@@ -766,7 +785,8 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     reportTripIncident,
     resolveTripIncident,
     arriveTrip,
-  }), [store, currentUser, isReady, login, logout, createDriver, deleteDriver, removeLiveLocation, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, addRepairShop, updateRepairShop, deleteRepairShop, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
+  }), [store, currentUser, isReady, login, logout, createDriver,
+    updateDriverBusNumber, deleteDriver, removeLiveLocation, setAdminPassword, addRoute, updateRoute, addSchedule, deleteSchedule, addTerminal, updateTerminal, deleteTerminal, addRepairShop, updateRepairShop, deleteRepairShop, updateContact, addAnnouncement, deleteAnnouncement, toggleAnnouncement, startTrip, updateTripLocation, cancelTripSafetyCheck, reportTripIncident, resolveTripIncident, arriveTrip]);
 
   return <TransitContext.Provider value={value}>{children}</TransitContext.Provider>;
 };

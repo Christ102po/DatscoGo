@@ -191,6 +191,9 @@ async function startServer() {
     )
   `;
 
+  await sql`ALTER TABLE datscogo_accounts ADD COLUMN IF NOT EXISTS bus_number TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS datscogo_driver_bus_number_unique ON datscogo_accounts (upper(bus_number)) WHERE role = 'driver' AND bus_number IS NOT NULL`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS datscogo_sessions (
       session_hash TEXT PRIMARY KEY,
@@ -726,13 +729,14 @@ async function startServer() {
     try {
       const user = await getAuthUser(req);
       const rows = user?.role === "admin"
-        ? await sql`SELECT id, username, display_name, role, active FROM datscogo_accounts ORDER BY role, display_name`
-        : await sql`SELECT id, display_name, role, active FROM datscogo_accounts WHERE role = 'driver' AND active = TRUE ORDER BY display_name`;
+        ? await sql`SELECT id, username, display_name, bus_number, role, active FROM datscogo_accounts ORDER BY role, display_name`
+        : await sql`SELECT id, display_name, bus_number, role, active FROM datscogo_accounts WHERE role = 'driver' AND active = TRUE ORDER BY display_name`;
       res.setHeader("Cache-Control", "no-store");
       res.json(rows.map((row) => ({
         id: row.id,
         ...(user?.role === "admin" ? { username: row.username } : {}),
         displayName: row.display_name,
+        busNumber: row.bus_number ?? null,
         role: row.role,
         active: row.active,
       })));
@@ -746,16 +750,33 @@ async function startServer() {
     const displayName = validObject(req.body) && typeof req.body.displayName === "string" ? req.body.displayName.trim().slice(0, 120) : "";
     const username = validObject(req.body) && typeof req.body.username === "string" ? req.body.username.trim().toLowerCase() : "";
     const password = validObject(req.body) && typeof req.body.password === "string" ? req.body.password : "";
+    const busNumber = validObject(req.body) && typeof req.body.busNumber === "string" ? req.body.busNumber.trim().toUpperCase() : "";
+    if (!/^[A-Z0-9][A-Z0-9 -]{0,19}$/.test(busNumber)) return res.status(400).json({ ok: false, error: "Enter a bus number (1–20 letters, numbers, spaces or hyphens)." });
     if (username.length < 4 || displayName.length < 2 || password.length < 10 || password.length > 256) return res.status(400).json({ ok: false, error: "Use a name, a 4+ character username, and a 10+ character password." });
     try {
       const id = `driver-${randomUUID()}`;
       const passwordHash = await hashPassword(password);
-      await sql`INSERT INTO datscogo_accounts (id, username, display_name, role, password_hash, active) VALUES (${id}, ${username}, ${displayName}, 'driver', ${passwordHash}, TRUE)`;
-      res.status(201).json({ ok: true, account: { id, username, displayName, role: "driver", active: true } });
+      await sql`INSERT INTO datscogo_accounts (id, username, display_name, bus_number, role, password_hash, active) VALUES (${id}, ${username}, ${displayName}, ${busNumber}, 'driver', ${passwordHash}, TRUE)`;
+      res.status(201).json({ ok: true, account: { id, username, displayName, busNumber, role: "driver", active: true } });
     } catch (error: any) {
-      if (String(error?.code) === "23505") return res.status(409).json({ ok: false, error: "This username is already in use." });
+      if (String(error?.code) === "23505") return res.status(409).json({ ok: false, error: "This username or bus number is already in use." });
       safeLog("Create driver failed:", error);
       res.status(500).json({ ok: false, error: "Unable to create the driver account." });
+    }
+  });
+
+  app.patch("/api/admin/drivers/:driverId/bus-number", requireRole("admin"), async (req, res) => {
+    const driverId = String(req.params.driverId || "").trim();
+    const busNumber = validObject(req.body) && typeof req.body.busNumber === "string" ? req.body.busNumber.trim().toUpperCase() : "";
+    if (!/^[A-Z0-9][A-Z0-9 -]{0,19}$/.test(busNumber)) return res.status(400).json({ ok: false, error: "Enter a valid bus number (1–20 characters)." });
+    try {
+      const rows = await sql`UPDATE datscogo_accounts SET bus_number = ${busNumber}, updated_at = NOW() WHERE id = ${driverId} AND role = 'driver' RETURNING id`;
+      if (!rows.length) return res.status(404).json({ ok: false, error: "Driver not found." });
+      res.json({ ok: true, busNumber });
+    } catch (error: any) {
+      if (String(error?.code) === "23505") return res.status(409).json({ ok: false, error: "Bus number already assigned to another driver." });
+      safeLog("Update driver bus number failed:", error);
+      res.status(500).json({ ok: false, error: "Unable to update bus number." });
     }
   });
 

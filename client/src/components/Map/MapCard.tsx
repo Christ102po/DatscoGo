@@ -38,14 +38,15 @@ const userIcon = L.divIcon({
   iconAnchor: [11, 11],
 });
 
-const makeVehicleIcon = (status: 'departed' | 'arrived' | 'idle') => {
+const makeVehicleIcon = (status: 'departed' | 'arrived' | 'idle', busNumber?: string | null) => {
   const isLive = status === 'departed';
   const color = isLive ? '#16a34a' : '#64748b';
-  const label = isLive ? 'LIVE Bus 1' : 'ARRIVED';
+  const label = busNumber?.trim() || 'Bus unassigned';
+  const safeLabel = label.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character);
   return L.divIcon({
     className: 'datscogo-vehicle-marker',
-    html: `<div style="display:flex;align-items:center;gap:4px"><div style="display:flex;height:30px;width:30px;align-items:center;justify-content:center;border:3px solid #fff;border-radius:50%;background:${color};box-shadow:0 4px 12px rgba(22,163,74,.45);color:#fff;font-size:15px">🚌</div><span style="border-radius:999px;background:${color};padding:3px 6px;color:#fff;font-family:ui-sans-serif,system-ui;font-size:8px;font-weight:800;letter-spacing:.04em;box-shadow:0 2px 5px rgba(15,23,42,.2)">${label}</span></div>`,
-    iconSize: [82, 34],
+    html: `<div style="display:flex;align-items:center;gap:4px"><div style="display:flex;height:30px;width:30px;align-items:center;justify-content:center;border:3px solid #fff;border-radius:50%;background:${color};box-shadow:0 4px 12px rgba(22,163,74,.45);color:#fff;font-size:15px">🚌</div><span style="border-radius:999px;background:${color};padding:3px 6px;color:#fff;font-family:ui-sans-serif,system-ui;font-size:8px;font-weight:800;letter-spacing:.04em;box-shadow:0 2px 5px rgba(15,23,42,.2)">${safeLabel}</span></div>`,
+    iconSize: [140, 34],
     iconAnchor: [15, 15],
   });
 };
@@ -599,9 +600,9 @@ export const MapCard: React.FC<{
             const driver = accounts.find((account) => account.id === trip.driverId);
             const route = routes.find((item) => item.id === trip.routeId);
             const isLive = trip.status === 'departed';
-            return <Marker key={trip.id} position={[trip.latitude, trip.longitude]} icon={makeVehicleIcon(trip.status)} eventHandlers={{ click: () => setSelectedTripId(isLive ? trip.id : null) }}>
+            return <Marker key={trip.id} position={[trip.latitude, trip.longitude]} icon={makeVehicleIcon(trip.status, driver?.busNumber)} eventHandlers={{ click: () => setSelectedTripId(isLive ? trip.id : null) }}>
               <Popup>
-                <div className={`text-xs font-bold ${isLive ? 'text-emerald-700' : 'text-slate-700'}`}>{driver?.displayName ?? 'DatscoGo vehicle'} · {isLive ? 'Live' : 'Arrived'}</div>
+                <div className={`text-xs font-bold ${isLive ? 'text-emerald-700' : 'text-slate-700'}`}>{driver?.displayName ?? 'DatscoGo vehicle'} · Bus {driver?.busNumber || 'unassigned'}</div>
                 <div className="mt-1 text-[10px] text-slate-500">{route?.title ?? 'Route unavailable'} · Updated {new Date(trip.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                 {isLive && (
                   <div className="mt-2 rounded-lg bg-slate-50 p-2 text-[10px] leading-4 text-slate-700">
