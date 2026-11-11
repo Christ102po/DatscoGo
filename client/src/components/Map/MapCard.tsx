@@ -396,7 +396,7 @@ export const MapCard: React.FC<{
   const [tilesLoaded, setTilesLoaded] = useState(false);
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
   const [showLiveOnly, setShowLiveOnly] = useState(false);
-  const [mapStyle, setMapStyle] = useState<MapStyle>('street');
+  const [mapStyle, setMapStyle] = useState<MapStyle>('satellite');
   const [mapStyleMenuOpen, setMapStyleMenuOpen] = useState(false);
   const [liveEta, setLiveEta] = useState<LiveEtaState>({ tripId: null, distanceMeters: null, etaSeconds: null, status: 'idle' });
   const [now, setNow] = useState(() => Date.now());

@@ -23,12 +23,13 @@ import {
 } from 'lucide-react';
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { RouteMapPicker } from './RouteMapPicker';
+import { MapCard } from '../Map/MapCard';
 import { TerminalLocationPicker } from './TerminalLocationPicker';
 import { Account, ActiveTrip, RepairShop, RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
 import { fetchRoadRoute } from '../../lib/routing';
 import { confirmAction, showError, showToast } from '../../lib/sweetalert';
 
-type Section = 'overview' | 'routes' | 'schedules' | 'terminals' | 'repair-shops' | 'announcements' | 'reports' | 'drivers' | 'trip-records' | 'security';
+type Section = 'live-map' | 'overview' | 'routes' | 'schedules' | 'terminals' | 'repair-shops' | 'announcements' | 'reports' | 'drivers' | 'trip-records' | 'security';
 type RouteDraft = Omit<TransitRoute, 'id' | 'coordinates' | 'waypoints' | 'discountedFare'>;
 
 const inputClass = 'mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100';
@@ -760,6 +761,29 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
   } = useTransit();
 
   const [section, setSection] = useState<Section>('overview');
+  const [adminLocation, setAdminLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [adminLocationStatus, setAdminLocationStatus] = useState('Enable location access to show your live position.');
+  const [locationEnabled, setLocationEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!locationEnabled) return;
+    if (!navigator.geolocation) {
+      setAdminLocationStatus('Geolocation is not supported by this device.');
+      return;
+    }
+    setAdminLocationStatus('Locating your device…');
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setAdminLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+        setAdminLocationStatus('Your live GPS position is displayed on the map.');
+      },
+      (error) => {
+        setAdminLocationStatus(error.code === 1 ? 'Location permission denied. Allow location access in browser settings.' : 'Unable to get your current location. Check GPS and connection.');
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [locationEnabled]);
   const [driver, setDriver] = useState({ displayName: '', username: '', password: '' });
   const [schedule, setSchedule] = useState({ routeId: routes[0]?.id ?? '', time: '', period: 'Morning' as 'Morning' | 'Afternoon', days: 'Monday – Saturday' });
   const [password, setPassword] = useState({ current: '', next: '' });
@@ -786,6 +810,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
 
   const nav: Array<[Section, string, typeof Route]> = [
     ['overview', 'Overview', ShieldCheck],
+    ['live-map', 'Live map', MapPinned],
     ['routes', 'Routes & fares', Route],
     ['schedules', 'Schedules', CalendarClock],
     ['terminals', 'Terminals', MapPinned],
@@ -931,6 +956,24 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
               </div>
             </article>
             <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-base font-black">Public contact details</h2><div className="mt-4 grid gap-3 sm:grid-cols-3"><input value={contact.facebook} onChange={(event) => updateContact({ ...contact, facebook: event.target.value })} placeholder="Facebook page" className={inputClass} /><input value={contact.phone} onChange={(event) => updateContact({ ...contact, phone: event.target.value })} placeholder="Contact number" className={inputClass} /><input type="email" value={contact.email} onChange={(event) => updateContact({ ...contact, email: event.target.value })} placeholder="Email address" className={inputClass} /></div></article>
+          </div>
+        )}
+
+        {section === 'live-map' && (
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black text-slate-900">Live location map</h2>
+                  <p className="mt-1 text-sm text-slate-500">View live vehicles and your own device location on the same map as passengers.</p>
+                </div>
+                <button type="button" onClick={() => setLocationEnabled((enabled) => !enabled)} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-700">
+                  {locationEnabled ? 'Stop my live location' : 'Show my live location'}
+                </button>
+              </div>
+              <p className="mt-3 text-xs text-slate-500" role="status">{locationEnabled ? adminLocationStatus : 'Your location is not being tracked. Click Show my live location to enable GPS.'}</p>
+            </div>
+            <MapCard userLocation={locationEnabled ? adminLocation : null} locationStatus={locationEnabled ? adminLocationStatus : 'Location disabled'} onRequestLocation={() => setLocationEnabled((enabled) => !enabled)} />
           </div>
         )}
 
