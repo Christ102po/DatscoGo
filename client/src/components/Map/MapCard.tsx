@@ -44,7 +44,7 @@ const makeVehicleIcon = (status: 'departed' | 'arrived' | 'idle') => {
   const label = isLive ? 'LIVE' : 'ARRIVED';
   return L.divIcon({
     className: 'datscogo-vehicle-marker',
-    html: `<div style="display:flex;align-items:center;gap:4px"><div style="display:flex;height:30px;width:30px;align-items:center;justify-content:center;border:3px solid #fff;border-radius:50%;background:${color};box-shadow:0 4px 12px rgba(22,163,74,.45);color:#fff;font-size:15px">🚌</div><span style="border-radius:999px;background:${color};padding:3px 6px;color:#fff;font-family:ui-sans-serif,system-ui;font-size:8px;font-weight:800;letter-spacing:.04em;box-shadow:0 2px 5px rgba(15,23,42,.2)">${label}</span></div>`,
+    html: `<div style="display:flex;align-items:center;gap:4px"><div style="display:flex;height:30px;width:30px;align-items:center;justify-content:center;border:3px solid #fff;border-radius:50%;background:${color};box-shadow:0 4px 12px rgba(22,163,74,.45);color:#fff;font-size:15px">🚌 Bus 1</div><span style="border-radius:999px;background:${color};padding:3px 6px;color:#fff;font-family:ui-sans-serif,system-ui;font-size:8px;font-weight:800;letter-spacing:.04em;box-shadow:0 2px 5px rgba(15,23,42,.2)">${label}</span></div>`,
     iconSize: [82, 34],
     iconAnchor: [15, 15],
   });
