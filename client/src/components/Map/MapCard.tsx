@@ -383,6 +383,7 @@ export const MapCard: React.FC<{
   locationStatus?: string;
   onRequestLocation?: () => void;
   onStopGuidance?: () => void;
+  showRecordedTrail?: boolean;
 }> = ({
   focusedTerminalId = null,
   focusedSearchDestination = null,
@@ -392,6 +393,7 @@ export const MapCard: React.FC<{
   locationStatus = '',
   onRequestLocation,
   onStopGuidance,
+  showRecordedTrail = false,
 }) => {
   const [isMounted, setIsMounted] = useState(false);
   const [tilesLoaded, setTilesLoaded] = useState(false);
@@ -567,6 +569,10 @@ export const MapCard: React.FC<{
               )}
             </>
           )}
+          {showRecordedTrail && selectedTrip && selectedTrip.gpsTrack && selectedTrip.gpsTrack.length >= 2 && (
+            <Polyline positions={selectedTrip.gpsTrack.map(([lat, lng]) => [lat, lng] as [number, number])}
+              pathOptions={{ color: '#f97316', weight: 5, opacity: 0.95 }} />
+          )}
           {previewRoute && !guidedTerminal && previewRoadPoints.length >= 2 && (
             <>
               <RoutePreviewViewport points={previewRoadPoints} />
@@ -612,7 +618,7 @@ export const MapCard: React.FC<{
                     <div className="mt-1 text-[9px] text-slate-500">ETA uses the remaining driving-road distance and the Datsco's latest GPS speed.</div>
                   </div>
                 )}
-                {isLive && <div className="mt-2 text-[10px] font-semibold text-blue-600">Select this vehicle to show its active route.</div>}
+                {isLive && <div className="mt-2 text-[10px] font-semibold text-blue-600">Select this vehicle to show its active route{showRecordedTrail ? ' and recorded GPS trail' : ''}.</div>}
                 {!isLive && <div className="mt-2 text-[10px] font-semibold text-slate-600">Vehicle is waiting at the destination terminal.</div>}
               </Popup>
             </Marker>;

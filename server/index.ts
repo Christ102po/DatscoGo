@@ -931,6 +931,10 @@ async function startServer() {
       `;
       const existingTrip = validObject(existingRows[0]?.trip_value) ? existingRows[0].trip_value : null;
       const sameTrip = existingTrip && String(existingTrip.id || "") === String(incomingTrip.id || "");
+      // A late GPS request must not reopen a completed trip or erase its saved trail.
+      if (sameTrip && existingTrip?.status === "arrived" && incomingTrip.status !== "arrived") {
+        return res.status(409).json({ ok: false, error: "The trip has already arrived." });
+      }
       const now = Date.now();
       const tripTimestamp = numericValue(incomingTrip.lastUpdated, now);
       const latitude = numericValue(incomingTrip.latitude);
@@ -966,6 +970,37 @@ async function startServer() {
           safetyResetAt: numericValue(incomingTrip.startedAt, tripTimestamp),
         };
       }
+
+      // Persist the ACTUAL GPS track on the server. Never trust a client-supplied
+      // track or replace an existing track with a stale browser snapshot.
+      // Points are [latitude, longitude, timestamp] and belong to one trip ID.
+      const previousTrack = sameTrip && existingTrip && Array.isArray(existingTrip.gpsTrack)
+        ? (existingTrip.gpsTrack as unknown[]).filter((point) =>
+            Array.isArray(point) && point.length === 3 &&
+            point.every((number) => typeof number === "number" && Number.isFinite(number))) as number[][]
+        : [];
+      const validPosition = Number.isFinite(latitude) && Number.isFinite(longitude) &&
+        latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 &&
+        (latitude !== 0 || longitude !== 0);
+      const lastPoint = previousTrack[previousTrack.length - 1];
+      const pointDistance = lastPoint ? haversineMeters(lastPoint[0], lastPoint[1], latitude, longitude) : Infinity;
+      const pointAge = lastPoint ? Math.max(0, now - lastPoint[2]) : Infinity;
+      const isArrival = trip.status === "arrived";
+      // Ignore GPS jumps over 1.5 km between reports when instantaneous speed
+      // would exceed 160 km/h; a bad point should not distort the route.
+      const plausibleMove = !lastPoint || pointDistance <= 1500 ||
+        (pointAge > 0 && pointDistance / (pointAge / 1000) <= 160 / 3.6);
+      const shouldRecord = validPosition && plausibleMove &&
+        (!lastPoint || (pointDistance >= 8 && pointAge >= 3000) || pointAge >= 30000 ||
+          (isArrival && pointDistance >= 1));
+      if (shouldRecord) previousTrack.push([latitude, longitude, now]);
+      // Bound the size of one record (up to ~14 hours at 5-second GPS samples).
+      // Earlier points are thinned progressively instead of discarding the origin.
+      if (previousTrack.length > 12000) {
+        const thinned = previousTrack.filter((_, index) => index === 0 || index % 2 === 0 || index === previousTrack.length - 1);
+        previousTrack.splice(0, previousTrack.length, ...thinned);
+      }
+      trip.gpsTrack = previousTrack;
 
       if (trip.status === "arrived") {
         trip.safetyCheckStatus = "idle";

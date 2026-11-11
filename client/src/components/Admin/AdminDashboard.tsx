@@ -24,6 +24,7 @@ import {
 import { DatscoLogo } from '../../assets/svg/DatscoLogo';
 import { RouteMapPicker } from './RouteMapPicker';
 import { MapCard } from '../Map/MapCard';
+import { TripTrailMap } from '../Map/TripTrailMap';
 import { TerminalLocationPicker } from './TerminalLocationPicker';
 import { Account, ActiveTrip, RepairShop, RouteWaypoint, Terminal, TransitRoute, useTransit } from '../../contexts/TransitContext';
 import { fetchRoadRoute } from '../../lib/routing';
@@ -529,6 +530,7 @@ function TripRecordsPanel({
   onNotice: (message: string, error?: boolean) => void;
 }) {
   const [records, setRecords] = useState<ActiveTrip[]>([]);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadRecords = async () => {
@@ -550,6 +552,7 @@ function TripRecordsPanel({
     return () => window.clearInterval(timer);
   }, []);
 
+  const selectedRecord = records.find((trip) => trip.id === selectedRecordId) ?? null;
   const driverName = (driverId: string, snapshotName?: string) => snapshotName || accounts.find((account) => account.id === driverId)?.displayName || 'Deleted/Unknown driver';
   const routeName = (routeId: string, snapshotName?: string) => snapshotName || routes.find((route) => route.id === routeId)?.title || 'Deleted/Unknown route';
   const formatDateTime = (value?: number) => value ? new Date(value).toLocaleString() : '—';
@@ -617,7 +620,7 @@ function TripRecordsPanel({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="flex items-center gap-2 font-black"><ClipboardList size={19} className="text-blue-600" />Driver trip records</h2>
-          <p className="mt-1 text-xs text-slate-500">Permanent history of driver departures and arrivals stored in PostgreSQL.</p>
+          <p className="mt-1 text-xs text-slate-500">Recorded GPS paths, actual departure/arrival timestamps, and travel durations stored in PostgreSQL.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" disabled={!records.length} onClick={() => openPrint(records, 'DatscoGo Driver Trip Records')} className="flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"><Printer size={15} />Print all</button>
@@ -625,11 +628,22 @@ function TripRecordsPanel({
         </div>
       </div>
 
+      {selectedRecord && (
+        <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/40 p-3 sm:p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div><h3 className="text-sm font-black text-slate-900">Actual GPS journey: {driverName(selectedRecord.driverId, selectedRecord.driverName)}</h3>
+              <p className="mt-1 text-xs text-slate-600">{routeName(selectedRecord.routeId, selectedRecord.routeName)} · {formatDateTime(selectedRecord.startedAt)} → {formatDateTime(selectedRecord.arrivedAt)} · {tripDuration(selectedRecord)}</p></div>
+            <button type="button" onClick={() => setSelectedRecordId(null)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">Close map</button>
+          </div>
+          <TripTrailMap points={selectedRecord.gpsTrack ?? []} />
+          <p className="mt-2 text-xs text-slate-500">Orange = actual GPS trail; green = first recorded GPS point; red = last recorded GPS point. Gaps may occur if GPS or network access was unavailable. This is not the planned road route.</p>
+        </div>
+      )}
       <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200">
         <table className="min-w-[900px] w-full text-left text-xs">
           <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-3">Driver</th><th className="px-3 py-3">Route</th><th className="px-3 py-3">Status</th><th className="px-3 py-3">Departure</th><th className="px-3 py-3">Arrival</th><th className="px-3 py-3">Duration</th><th className="px-3 py-3 text-right">Actions</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
-            {records.map((trip) => <tr key={trip.id} className="hover:bg-slate-50/70"><td className="px-3 py-3 font-bold text-slate-900">{driverName(trip.driverId, trip.driverName)}</td><td className="px-3 py-3 text-slate-700">{routeName(trip.routeId, trip.routeName)}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${trip.status === 'arrived' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{trip.status === 'arrived' ? 'Arrived' : 'Departed'}</span></td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.startedAt)}</td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.arrivedAt)}</td><td className="px-3 py-3 text-slate-600">{tripDuration(trip)}</td><td className="px-3 py-3"><div className="flex justify-end gap-2"><button type="button" onClick={() => openPrint([trip], `DatscoGo Trip Record - ${driverName(trip.driverId, trip.driverName)}`)} className="rounded-lg border border-blue-200 p-2 text-blue-600 hover:bg-blue-50" aria-label="Print trip record"><Printer size={15} /></button><button type="button" onClick={() => deleteRecord(trip)} className="rounded-lg border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label="Delete trip record"><Trash2 size={15} /></button></div></td></tr>)}
+            {records.map((trip) => <tr key={trip.id} className="hover:bg-slate-50/70"><td className="px-3 py-3 font-bold text-slate-900">{driverName(trip.driverId, trip.driverName)}</td><td className="px-3 py-3 text-slate-700">{routeName(trip.routeId, trip.routeName)}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${trip.status === 'arrived' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}`}>{trip.status === 'arrived' ? 'Arrived' : 'Departed'}</span></td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.startedAt)}</td><td className="px-3 py-3 text-slate-600">{formatDateTime(trip.arrivedAt)}</td><td className="px-3 py-3 text-slate-600">{tripDuration(trip)}</td><td className="px-3 py-3"><div className="flex justify-end gap-2"><button type="button" onClick={() => setSelectedRecordId(trip.id)} className="rounded-lg border border-orange-200 px-2 py-2 text-orange-700 hover:bg-orange-50" aria-label="View recorded GPS route">View GPS route ({trip.gpsTrack?.length ?? 0})</button><button type="button" onClick={() => openPrint([trip], `DatscoGo Trip Record - ${driverName(trip.driverId, trip.driverName)}`)} className="rounded-lg border border-blue-200 p-2 text-blue-600 hover:bg-blue-50" aria-label="Print trip record"><Printer size={15} /></button><button type="button" onClick={() => deleteRecord(trip)} className="rounded-lg border border-red-200 p-2 text-red-600 hover:bg-red-50" aria-label="Delete trip record"><Trash2 size={15} /></button></div></td></tr>)}
           </tbody>
         </table>
         {!loading && records.length === 0 && <div className="p-8 text-center text-sm text-slate-400">No completed driver trip records yet. A record will appear after a driver marks a trip as arrived.</div>}
@@ -983,7 +997,7 @@ export const AdminDashboard: React.FC<{ onLogout: () => void }> = ({ onLogout })
               </div>
               <p className="mt-3 text-xs text-slate-500" role="status">{locationEnabled ? adminLocationStatus : 'Your location is not being tracked. Click Show my live location to enable GPS.'}</p>
             </div>
-            <MapCard userLocation={locationEnabled ? adminLocation : null} locationStatus={locationEnabled ? adminLocationStatus : 'Location disabled'} onRequestLocation={() => setLocationEnabled((enabled) => !enabled)} />
+            <MapCard showRecordedTrail userLocation={locationEnabled ? adminLocation : null} locationStatus={locationEnabled ? adminLocationStatus : 'Location disabled'} onRequestLocation={() => setLocationEnabled((enabled) => !enabled)} />
           </div>
         )}
 

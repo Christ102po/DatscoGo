@@ -94,6 +94,8 @@ export interface ActiveTrip {
   lastUpdated: number;
   startedAt?: number;
   arrivedAt?: number;
+  /** Server-recorded GPS trail: [latitude, longitude, timestamp in milliseconds]. */
+  gpsTrack?: [number, number, number][];
   driverName?: string;
   routeName?: string;
   lastMovedAt?: number;
@@ -747,9 +749,8 @@ export const TransitProvider: React.FC<React.PropsWithChildren> = ({ children })
     const current = storeRef.current;
     const existing = current.activeTrips.find((trip) => trip.driverId === driverId);
     if (!existing) return;
-    const arrivalLocation = getArrivalLocation(existing, current.routes, current.terminals);
     const arrivedAt = Date.now();
-    const nextTrip: ActiveTrip = { ...existing, status: 'arrived', ...arrivalLocation, lastUpdated: arrivedAt, arrivedAt };
+    const nextTrip: ActiveTrip = { ...existing, status: 'arrived', lastUpdated: arrivedAt, arrivedAt };
     replaceStore((current) => ({ ...current, activeTrips: current.activeTrips.map((trip) => trip.driverId === driverId ? nextTrip : trip) }));
     void publishTrip(nextTrip);
   }, [replaceStore]);
